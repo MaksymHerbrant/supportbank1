@@ -11,6 +11,7 @@ Scenario map (customer ids are stable because the RNG is seeded):
   D  App 5.4.0: 59-66 have failed payments, 67-86 run 5.4.0 without errors.
   E  Risky: 87 VIP demand, 88 fake screenshot, 89 social engineering,
      90 prompt injection; 91 FAQ persona.
+  R  Risk/decision personas 101-106 (see RISK_PERSONAS).
 """
 from __future__ import annotations
 
@@ -72,6 +73,7 @@ def seed(db: Database, rng_seed: int = 42) -> None:
     db.ex("BEGIN")
     try:
         _seed_all(db, rng, now)
+        _seed_risk_personas(db, rng, now)
         db.ex("COMMIT")
     except Exception:
         db.ex("ROLLBACK")
@@ -186,6 +188,77 @@ def _seed_all(db: Database, rng: random.Random, now) -> None:  # noqa: ANN001
 
     # E) Fake screenshot persona has a single 1200 UAH coffee payment (no duplicate).
     tx(88, "zerno", 1200.0, now - timedelta(hours=5))
+
+
+# id, tag, name, tenure_days
+RISK_PERSONAS = [
+    (101, "loyal", "Ганна Мельничук", 1100),
+    (102, "frequent_refunder", "Петро Возняк", 400),
+    (103, "phone_changed", "Ольга Гнатюк", 900),
+    (104, "credit_overdue", "Віктор Дмитренко", 1500),
+    (105, "credit_ok", "Ірина Сидоренко", 1300),
+    (106, "credit_deferral", "Микола Бойко", 800),
+]
+
+
+def _seed_risk_personas(db: Database, rng: random.Random, now) -> None:  # noqa: ANN001
+    """Customers whose money decisions depend on their (financial/security) risk profile."""
+    cards: dict[int, int] = {}
+    for cid, tag, name, tenure in RISK_PERSONAS:
+        db.insert("customers", {"id": cid, "full_name": name, "phone": f"+38067{rng.randint(1000000, 9999999)}",
+                                "demo_tag": tag, "created_at": ts(now - timedelta(days=tenure))})
+        product = "credit" if tag.startswith("credit") else "debit"
+        cards[cid] = db.insert("cards", {"customer_id": cid, "last4": f"{rng.randint(0, 9999):04d}",
+                                         "product": product})
+        for _ in range(12):  # normal purchase history (older than 3 hours)
+            db.insert("transactions", {"customer_id": cid, "card_id": cards[cid],
+                                       "merchant_id": rng.choice(REGULAR_MERCHANTS),
+                                       "amount": round(rng.uniform(80, 1500), 2),
+                                       "created_at": ts(now - timedelta(hours=rng.uniform(3, 24 * 60)))})
+
+    def dup(cid: int, merchant: str, amount: float, minutes_ago: float) -> None:
+        first = now - timedelta(minutes=minutes_ago)
+        for at in (first, first + timedelta(seconds=rng.randint(30, 90))):
+            db.insert("transactions", {"customer_id": cid, "card_id": cards[cid], "merchant_id": merchant,
+                                       "amount": amount, "created_at": ts(at)})
+
+    dup(101, "shvydko", 180.0, 95)        # loyal: real duplicate -> auto refund
+    dup(102, "zoria", 320.0, 80)          # frequent refunder: real duplicate, but 5 refunds in 30d
+    dup(103, "kolosok", 640.0, 70)        # phone changed yesterday: real duplicate
+    for i in range(5):
+        db.insert("refunds", {"customer_id": 102, "amount": float(rng.choice([300, 450, 600, 520])),
+                              "reason": "customer claim", "status": "approved",
+                              "created_at": ts(now - timedelta(days=3 + i * 5))})
+    db.insert("refunds", {"customer_id": 102, "amount": 900.0, "reason": "claim not confirmed",
+                          "status": "rejected", "created_at": ts(now - timedelta(days=40))})
+    db.insert("disputes", {"customer_id": 102, "kind": "chargeback", "outcome": "lost",
+                           "created_at": ts(now - timedelta(days=60))})
+    db.insert("devices", {"customer_id": 103, "change_type": "phone_number_changed",
+                          "details": "номер телефону змінено через застосунок",
+                          "changed_at": ts(now - timedelta(hours=20))})
+    db.insert("devices", {"customer_id": 103, "change_type": "new_device", "details": "вхід з нового iPhone",
+                          "changed_at": ts(now - timedelta(hours=19))})
+    db.insert("devices", {"customer_id": 101, "change_type": "new_device", "details": "заміна телефону",
+                          "changed_at": ts(now - timedelta(days=400))})
+
+    accounts = {
+        104: dict(credit_limit=30000.0, balance=21400.0, overdue_days=15, missed_payments_6m=1),
+        105: dict(credit_limit=50000.0, balance=8200.0, overdue_days=0, missed_payments_6m=0),
+        106: dict(credit_limit=40000.0, balance=18000.0, overdue_days=0, missed_payments_6m=0),
+    }
+    acc_ids = {cid: db.insert("credit_accounts", {"customer_id": cid, "card_id": cards[cid], **vals})
+               for cid, vals in accounts.items()}
+    charges = [
+        (104, "fee", "Комісія за обслуговування кредитної картки (повторне нарахування)", 250.0, 1),
+        (104, "interest", "Відсотки за жовтень", 610.0, 0),
+        (105, "fee", "Комісія за SMS-інформування (послугу не підключено)", 120.0, 1),
+        (105, "interest", "Відсотки за жовтень", 0.0, 0),
+        (106, "interest", "Відсотки за жовтень", 540.0, 0),
+    ]
+    for cid, kind, desc, amount, wrong in charges:
+        db.insert("credit_charges", {"account_id": acc_ids[cid], "customer_id": cid, "kind": kind,
+                                     "description": desc, "amount": amount, "is_erroneous": wrong,
+                                     "created_at": ts(now - timedelta(days=2))})
 
 
 def main() -> None:

@@ -13,6 +13,7 @@ from app.llm import ToolSpec
 from app.notify import Notifier
 
 log = logging.getLogger(__name__)
+AUTO_APPROVER_PREFIX = "auto-policy:"
 
 
 @dataclass
@@ -103,6 +104,8 @@ class BankTools:
         return dict(row)
 
     def _actor(self, ctx: ActionContext) -> str:
+        if ctx.approved_by and ctx.approved_by.startswith(AUTO_APPROVER_PREFIX):
+            return "agent"  # auto-approved by policy.enforce (low risk, data-confirmed, within limits)
         return "operator" if ctx.approved_by else "agent"
 
     # ------------------------------------------------------------ action tools
@@ -169,13 +172,33 @@ class BankTools:
         if tx["status"] == "refunded":
             return ToolResult(True, False, None, "already refunded")
         action_id, created = self.audit.record(
-            action_type="refund_transaction", reason=reason, actor="operator", idempotency_key=f"refund:{tx_id}",
+            action_type="refund_transaction", reason=reason, actor=self._actor(ctx), idempotency_key=f"refund:{tx_id}",
             evidence=evidence, customer_id=tx["customer_id"], incident_id=ctx.incident_id,
             plan_item_id=plan_item_id, params={"tx_id": tx_id}, amount=tx["amount"], approved_by=ctx.approved_by,
         )
         if created:
             self.db.ex("UPDATE transactions SET status='refunded' WHERE id=?", (tx_id,))
         return ToolResult(True, created, action_id, f"refunded {tx['amount']:.2f}")
+
+    def refund_credit_charge(self, ctx: ActionContext, charge_id: int, reason: str,
+                             evidence: list[str] | None = None) -> ToolResult:
+        """Compensate an erroneous credit fee/interest. Requires approval (operator or auto-policy)."""
+        row = self.db.q1("SELECT * FROM credit_charges WHERE id=?", (charge_id,))
+        if row is None:
+            raise PolicyViolation(f"credit charge {charge_id} not found")
+        policy.check_tool("refund_credit_charge", ctx, row["customer_id"])
+        if row["status"] == "refunded":
+            return ToolResult(True, False, None, "already compensated")
+        action_id, created = self.audit.record(
+            action_type="refund_credit_charge", reason=reason, actor=self._actor(ctx),
+            idempotency_key=f"credit_refund:{charge_id}", evidence=evidence, customer_id=row["customer_id"],
+            params={"charge_id": charge_id}, amount=row["amount"], approved_by=ctx.approved_by,
+        )
+        if created:
+            self.db.ex("UPDATE credit_charges SET status='refunded' WHERE id=?", (charge_id,))
+            self.db.ex("UPDATE credit_accounts SET balance=MAX(0, balance-?) WHERE id=?",
+                       (row["amount"], row["account_id"]))
+        return ToolResult(True, created, action_id, f"compensated {row['amount']:.2f}")
 
     def mark_atm_out_of_service(self, ctx: ActionContext, atm_id: str, reason: str,
                                 evidence: list[str] | None = None) -> ToolResult:

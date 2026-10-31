@@ -98,22 +98,50 @@ def render_escalation(db: Database, esc_id: int) -> tuple[str, InlineKeyboardMar
         lines += [f"Звернення: «{esc((t['text'] or '')[:400])}»",
                   f"Triage: {esc(t['category'])} · рівень {t['level']} ({LEVEL_NAME.get(t['level'], '')}) · "
                   f"conf {t['confidence']}" + (f" · ⚠️ {esc(', '.join(flags))}" if flags else "")]
-    proposed = loads(e["proposed_json"], None)
+    proposed = loads(e["proposed_json"], None) or {}
+    lines += _risk_lines(db, e["customer_id"], proposed.get("decision_id"))
     buttons = None
     if e["status"] != "open":
         lines.append(f"Статус: {esc(e['status'])} ({esc(e['decided_by'] or '')})")
-    elif proposed and proposed.get("action") == "refund_transaction":
-        lines.append(f"💡 Пропозиція агента: повернення {proposed.get('amount', 0):.0f} грн (tx #{proposed['tx_id']}) — "
-                     f"потрібне підтвердження оператора")
+    elif proposed.get("action") in ("refund_transaction", "refund_credit_charge"):
+        what = (f"повернення {money(proposed.get('amount'))} грн (tx #{proposed['tx_id']})"
+                if proposed["action"] == "refund_transaction"
+                else f"компенсація кредитного нарахування {money(proposed.get('amount'))} грн (#{proposed['charge_id']})")
+        lines.append(f"💡 Пропозиція агента: {what} — потрібне підтвердження оператора")
         buttons = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="✅ Підтвердити", callback_data=f"esc:ok:{esc_id}"),
             InlineKeyboardButton(text="❌ Відхилити", callback_data=f"esc:no:{esc_id}")]])
     else:
-        if proposed:
-            lines.append(f"💡 Пропозиція: {esc(proposed)}")
         buttons = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="👤 Взяти в роботу", callback_data=f"esc:take:{esc_id}")]])
     return "\n".join(lines)[:4000], buttons
+
+
+def _risk_lines(db: Database, customer_id: int | None, decision_id: int | None) -> list[str]:
+    """Risk level, score, factors with evidence, LLM vs final decision and operator note."""
+    if customer_id is None:
+        return []
+    from app.agent.risk import assess
+
+    lines = []
+    d = db.q1("SELECT * FROM decisions WHERE id=?", (decision_id,)) if decision_id else None
+    if d is not None:
+        level, score, factors = d["risk_level"], d["risk_score"], loads(d["factors_json"], [])
+    else:
+        _, ra = assess(db, customer_id)
+        level, score, factors = ra.level, ra.score, [f.model_dump() for f in ra.factors]
+    icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(level, "")
+    lines.append(f"{icon} <b>Ризик: {level.upper()} ({score})</b>")
+    lines += [f"  • +{f['points']} {esc(f['evidence'])}" for f in factors[:6]]
+    if d is not None:
+        if d["security_review"]:
+            lines.append("🔐 <b>SECURITY REVIEW</b> — перевірте безпеку акаунта перед будь-якою дією")
+        enforced = loads(d["enforced_json"], [])
+        lines.append(f"🤖 LLM: {esc(d['llm_decision'] or '—')} → policy: <b>{esc(d['final_decision'])}</b>"
+                     + (f" (посилено: {esc('; '.join(enforced))})" if enforced else ""))
+        if d["operator_note"]:
+            lines.append(f"📝 {esc(d['operator_note'])}")
+    return lines
 
 
 def render_bug(db: Database, bug_id: int) -> str:

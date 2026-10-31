@@ -172,6 +172,17 @@ class Executor:
                                                  idempotency_key=f"esc_notify:{esc_id}")
                 return f"Повернено {_amount(amount)} грн, клієнта повідомлено."
             return "Повернення вже було виконано раніше (ідемпотентність)."
+        if proposed.get("action") == "refund_credit_charge":
+            res = self.tools.refund_credit_charge(ctx, int(proposed["charge_id"]), f"escalation #{esc_id}",
+                                                  proposed.get("evidence"))
+            amount = proposed.get("amount")
+            if res.created:
+                text = (f"Оператор підтвердив компенсацію: {_amount(amount)} грн помилкового нарахування повернуто "
+                        f"на кредитний рахунок.")
+                await self.tools.notify_customer(ctx, esc["customer_id"], text, f"escalation #{esc_id} approved",
+                                                 idempotency_key=f"esc_notify:{esc_id}")
+                return f"Компенсовано {_amount(amount)} грн, клієнта повідомлено."
+            return "Компенсацію вже було виконано раніше (ідемпотентність)."
         if proposed.get("action") == "unblock_card":
             self.tools.unblock_card(ctx, int(proposed["card_id"]), f"escalation #{esc_id}")
             return "Картку розблоковано."

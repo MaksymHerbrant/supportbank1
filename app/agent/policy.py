@@ -29,7 +29,7 @@ FORCE_HUMAN_FLAGS = frozenset({"fraud", "legal", "angry", "repeat_contact", "soc
 
 CATEGORIES = (
     "faq", "card_lost", "atm_capture", "double_charge", "phishing", "app_payment_error",
-    "refund_demand", "social_engineering", "dispute", "other",
+    "refund_demand", "social_engineering", "dispute", "credit_fee", "credit_relief", "other",
 )
 # Minimum level per category. The LLM may raise a level, never lower it below this.
 CATEGORY_MIN_LEVEL: dict[str, Level] = {
@@ -42,6 +42,8 @@ CATEGORY_MIN_LEVEL: dict[str, Level] = {
     "app_payment_error": Level.INVESTIGATE,
     "refund_demand": Level.INVESTIGATE,
     "social_engineering": Level.HUMAN,
+    "credit_fee": Level.INVESTIGATE,
+    "credit_relief": Level.INVESTIGATE,
     "other": Level.INVESTIGATE,
 }
 
@@ -55,7 +57,7 @@ TOOL_ALLOWLIST: dict[Level, frozenset[str]] = {
     # Protective block of the requester's own card is always allowed.
     Level.HUMAN: READ_TOOLS | {"block_card", "notify_customer", "escalate_to_operator"},
 }
-APPROVAL_REQUIRED = frozenset({"refund_transaction", "unblock_card"})
+APPROVAL_REQUIRED = frozenset({"refund_transaction", "refund_credit_charge", "unblock_card"})
 FORBIDDEN_TOOLS = frozenset({"transfer_funds", "change_personal_data", "reveal_card_details", "unmask_card"})
 # Actions an operator-approved plan may execute.
 PLAN_ACTIONS = frozenset({"refund_transaction", "block_card", "order_card_reissue", "open_dispute",

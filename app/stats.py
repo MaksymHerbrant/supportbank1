@@ -62,3 +62,38 @@ def render(st: Stats) -> str:
         f"⏱ Оцінка зекономленого часу операторів: ~<b>{st.minutes_saved} хв</b> "
         f"(авто×{MIN_PER_AUTO_RESOLVED} + привʼязка×{MIN_PER_INSTANT_LINK} + проактивно×{MIN_PER_PROACTIVE})"
     )
+
+
+def render_dashboard(db: Database) -> str:
+    """Decision distribution and top escalation reasons."""
+    total = db.scalar("SELECT COUNT(*) FROM decisions") or 0
+    dist = {r["final_decision"]: r["n"] for r in db.q(
+        "SELECT final_decision, COUNT(*) AS n FROM decisions GROUP BY final_decision")}
+    security = db.scalar("SELECT COUNT(*) FROM decisions WHERE security_review=1") or 0
+    strengthened = db.scalar("SELECT COUNT(*) FROM decisions WHERE llm_decision='auto_approve' "
+                             "AND final_decision!='auto_approve'") or 0
+    auto_sum = db.scalar("SELECT SUM(amount) FROM actions WHERE actor='agent' "
+                         "AND action_type IN ('refund_transaction','refund_credit_charge')") or 0
+    reasons: dict[str, int] = {}
+    import json
+    for r in db.q("SELECT enforced_json, factors_json FROM decisions WHERE final_decision='needs_operator'"):
+        for item in json.loads(r["enforced_json"] or "[]"):
+            key = item.split("(")[0].split(":")[0].strip()
+            reasons[key] = reasons.get(key, 0) + 1
+    for r in db.q("SELECT t.category, COUNT(*) AS n FROM escalations e JOIN tickets t ON t.id=e.ticket_id "
+                  "WHERE e.status != 'closed' GROUP BY t.category"):
+        reasons[f"ескалація: {r['category']}"] = reasons.get(f"ескалація: {r['category']}", 0) + r["n"]
+    top = sorted(reasons.items(), key=lambda kv: -kv[1])[:6]
+    lines = [
+        "📈 <b>Дашборд рішень</b>",
+        f"Рішень про гроші: {total}",
+        f"✅ auto_approve: <b>{dist.get('auto_approve', 0)}</b> (повернено автоматично {money(float(auto_sum))} грн)",
+        f"👩‍💼 needs_operator: <b>{dist.get('needs_operator', 0)}</b>",
+        f"🔐 security_review: <b>{security}</b>",
+        f"ℹ️ info_only: {dist.get('info_only', 0)}",
+        f"🛡 policy посилила рішення LLM (auto → operator): <b>{strengthened}</b>",
+        "",
+        "<b>Топ причин ескалації:</b>",
+    ]
+    lines += [f"  {n}× {reason}" for reason, n in top] or ["  —"]
+    return "\n".join(lines)

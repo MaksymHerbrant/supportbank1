@@ -12,13 +12,15 @@ import logging
 from dataclasses import dataclass, field
 
 from app.agent import policy
+from app.agent.decision import DecisionContext, DecisionEngine, ProposedAction, customer_message_ok, \
+    customer_template
 from app.agent.faq_rag import FaqRAG
 from app.agent.policy import ActionContext, Level, PolicyViolation
 from app.agent.responder import ReplyFacts, Responder
-from app.agent.tools import BankTools
+from app.agent.tools import AUTO_APPROVER_PREFIX, BankTools
 from app.agent.triage import INCIDENT_CATEGORIES, MediaFields, Signature, Triage, TriageResult
 from app.actions.executor import incident_problem
-from app.db.repo import Database, ago, dumps, local_time, now_ts
+from app.db.repo import Database, ago, dumps, local_time, money, now_ts
 from app.incidents import impact
 from app.incidents.service import IncidentService
 
@@ -41,8 +43,9 @@ class Reply:
 
 class SupportPipeline:
     def __init__(self, db: Database, triage: Triage, tools: BankTools, faq: FaqRAG, responder: Responder,
-                 incidents: IncidentService) -> None:
+                 incidents: IncidentService, decisions: DecisionEngine | None = None) -> None:
         self.db = db
+        self.decisions = decisions or DecisionEngine(db, triage.llm)
         self.triage = triage
         self.tools = tools
         self.faq = faq
@@ -138,6 +141,15 @@ class SupportPipeline:
             elif tr.level == Level.HUMAN:
                 await self._escalate(ticket_id, cid, tr, f"level 4: flags={tr.risk_flags} confidence={tr.confidence}")
                 out.escalated = True
+            elif cat == "credit_fee":
+                facts, out = await self._credit_fee(cid, ticket_id, text, tr, out)
+            elif cat == "credit_relief":
+                acc = self.db.q1("SELECT * FROM credit_accounts WHERE customer_id=?", (cid,))
+                evidence = [f"кредитний рахунок: борг {money(acc['balance'])} грн, ліміт {money(acc['credit_limit'])} грн, "
+                            f"прострочка {acc['overdue_days']} дн."] if acc else ["кредитного рахунку не знайдено"]
+                facts, out = await self._money_decision(cid, ticket_id, tr, DecisionContext(
+                    kind="credit_relief", customer_id=cid, ticket_id=ticket_id, claim_text=text, data_confirmed=False,
+                    evidence=evidence, risk_flags=self._money_flags(tr), language=tr.language), out)
             elif cat == "faq":
                 ans = await self.faq.answer(text, tr.language)
                 if ans.escalate or not ans.text:
@@ -189,6 +201,86 @@ class SupportPipeline:
         out.text = await self.responder.compose(facts)
         return out
 
+    @staticmethod
+    def _money_flags(tr: TriageResult) -> list[str]:
+        """Flags that block auto-approval: deterministic ones, plus the LLM's hard flags (fraud/legal/...).
+        A soft LLM guess like 'unverified_claim' does not count: the claim is verified against the DB."""
+        hard = set(tr.risk_flags) & policy.FORCE_HUMAN_FLAGS
+        rules = set(tr.rule_flags) & (policy.FORCE_HUMAN_FLAGS | {"vip_pressure"})
+        return sorted(hard | rules)
+
+    def _possible_incident(self, cid: int, tr: TriageResult) -> bool:
+        """Other customers complaining about the same signature recently -> mass issue, not an isolated case."""
+        key = tr.signature.key()
+        if not key:
+            return False
+        rows = self.db.q("SELECT customer_id, signature_json FROM tickets WHERE customer_id != ? AND created_at >= ?",
+                         (cid, ago(minutes=self.incidents.detector.window_min)))
+        return any(Signature.model_validate_json(r["signature_json"]).key() == key for r in rows)
+
+    async def _credit_fee(self, cid: int, ticket_id: int, text: str, tr: TriageResult,
+                          out: Reply) -> tuple[ReplyFacts, Reply]:
+        charge = self.db.q1("SELECT * FROM credit_charges WHERE customer_id=? AND is_erroneous=1 AND status='charged' "
+                            "ORDER BY created_at DESC LIMIT 1", (cid,))
+        if charge is None:
+            self._set_status(ticket_id, "waiting_customer")
+            msg = ("Я перевірив нарахування за вашим кредитним рахунком і не бачу помилкових комісій чи відсотків. "
+                   "Уточніть, будь ласка, дату і суму нарахування.")
+            return ReplyFacts("decision", tr.language, details=msg), out
+        evidence = [f"credit_charge #{charge['id']}: {charge['description']}, {money(charge['amount'])} грн "
+                    f"(білінг позначив як помилкове)"]
+        return await self._money_decision(cid, ticket_id, tr, DecisionContext(
+            kind="credit_fee", customer_id=cid, ticket_id=ticket_id, claim_text=text, data_confirmed=True,
+            evidence=evidence, proposed=ProposedAction(type="refund_credit_charge", ref_id=charge["id"],
+                                                       amount=charge["amount"]),
+            risk_flags=self._money_flags(tr), language=tr.language), out)
+
+    async def _money_decision(self, cid: int, ticket_id: int, tr: TriageResult, dctx: DecisionContext,
+                              out: Reply) -> tuple[ReplyFacts, Reply]:
+        """LLM decision + policy.enforce; auto-approved refunds execute immediately, others go to an operator."""
+        fd = await self.decisions.decide(dctx)
+        executed = False
+        if fd.decision == "auto_approve" and fd.action:
+            actx = ActionContext(level=tr.level, requester_id=cid,
+                                 approved_by=f"{AUTO_APPROVER_PREFIX}decision#{fd.decision_id}")
+            reason = f"auto-approved decision #{fd.decision_id} ({dctx.kind}, risk {fd.risk.level})"
+            if fd.action.type == "refund_transaction":
+                self.tools.refund_transaction(actx, fd.action.ref_id, reason, dctx.evidence)
+            else:
+                self.tools.refund_credit_charge(actx, fd.action.ref_id, reason, dctx.evidence)
+            executed = True
+            out.actions.append(f"{fd.action.type} #{fd.action.ref_id}: {money(fd.action.amount)} грн (auto)")
+            self._set_status(ticket_id, "auto_resolved")
+        elif fd.decision == "needs_operator":
+            proposed: dict = {"decision_id": fd.decision_id}
+            if fd.action:
+                key = "tx_id" if fd.action.type == "refund_transaction" else "charge_id"
+                proposed.update({"action": fd.action.type, key: fd.action.ref_id, "amount": fd.action.amount,
+                                 "evidence": dctx.evidence})
+                if fd.action.type == "refund_transaction":
+                    dctx_ctx = ActionContext(level=tr.level, requester_id=cid)
+                    if "open_dispute" in policy.allowed_tools(tr.level):  # protective, no money moves
+                        self.tools.open_dispute(dctx_ctx, fd.action.ref_id, "duplicate confirmed in data",
+                                                dctx.evidence, ticket_id)
+                        out.actions.append(f"open_dispute tx#{fd.action.ref_id}")
+            reason = ("кредитний відділ: запит на зміну умов кредиту" if dctx.kind == "credit_relief"
+                      else f"{dctx.kind}: потрібне рішення оператора")
+            if fd.security_review:
+                reason = "🔐 SECURITY REVIEW · " + reason
+            await self._escalate(ticket_id, cid, tr, reason, proposed)
+            out.escalated = True
+        else:
+            self._set_status(ticket_id, "waiting_customer")
+        msg = fd.customer_message
+        if (not msg or fd.enforced or not customer_message_ok(msg)
+                or not policy.is_reply_safe(msg, refund_executed=executed)):
+            msg = customer_template(fd, dctx, executed)
+        if (executed and dctx.credit_question and dctx.profile and dctx.profile.credit_balance > 0
+                and "заборгован" not in msg.lower()):
+            msg += (" Оскільки на кредитній картці є заборгованість, кошти можуть бути спрямовані на її погашення "
+                    "згідно з правилами банку.")
+        return ReplyFacts("decision", tr.language, details=msg), out
+
     def _card_for(self, cid: int, tr: TriageResult) -> dict | None:
         if tr.signature.atm_id:
             row = self.db.q1("SELECT c.* FROM atm_events e JOIN cards c ON c.id=e.card_id WHERE e.customer_id=? "
@@ -230,16 +322,16 @@ class SupportPipeline:
         if pairs:
             p = pairs[-1]
             merchant = self.db.scalar("SELECT name FROM merchants WHERE id=?", (p["merchant_id"],))
-            evidence = [f"tx #{p['first_id']} і #{p['dup_id']}: {p['amount']:.2f} грн, інтервал {p['gap_s']} с"]
-            if ctx.level >= Level.SAFE_ACTION and "open_dispute" in policy.allowed_tools(ctx.level):
-                self.tools.open_dispute(ctx, p["dup_id"], "duplicate transaction confirmed in data", evidence, ticket_id)
-                out.actions.append(f"open_dispute tx#{p['dup_id']}")
-            await self._escalate(ticket_id, cid, tr, f"duplicate confirmed: {evidence[0]} ({merchant})",
-                                 {"action": "refund_transaction", "tx_id": p["dup_id"], "amount": p["amount"],
-                                  "evidence": evidence})
-            out.escalated = True
-            return ReplyFacts("own_duplicate", tr.language, amount=p["amount"],
-                              details=f"{merchant}, {local_time(p['first_at'])}"), out
+            evidence = [f"tx #{p['first_id']} і #{p['dup_id']}: {merchant}, {p['amount']:.2f} грн, "
+                        f"інтервал {p['gap_s']} с"]
+            if tr.signature.merchant_id is None:
+                tr.signature.merchant_id = p["merchant_id"]
+            return await self._money_decision(cid, ticket_id, tr, DecisionContext(
+                kind="refund_duplicate", customer_id=cid, ticket_id=ticket_id, claim_text=tr.intent,
+                data_confirmed=True, evidence=evidence,
+                proposed=ProposedAction(type="refund_transaction", ref_id=p["dup_id"], amount=p["amount"]),
+                risk_flags=self._money_flags(tr), possible_incident=self._possible_incident(cid, tr),
+                language=tr.language), out)
         recent = self.tools.get_transactions(customer_id=cid, merchant_id=tr.signature.merchant_id, since_hours=72,
                                              limit=3)
         seen = ", ".join(f"{t['merchant']} {t['amount']:.0f} грн" for t in recent) or "операцій не знайдено"

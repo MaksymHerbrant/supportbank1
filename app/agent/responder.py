@@ -69,6 +69,7 @@ TEMPLATES_UK = {
                     "відбувається, або надішліть запис екрана.",
     "escalated": "Дякую за звернення. Я передав його оператору — він зв'яжеться з вами найближчим часом.",
     "faq": "{details}",
+    "decision": "{details}",
     "resolved_final": "Проблему з {problem} вирішено. {details}",
 }
 TEMPLATES_EN = {
@@ -106,6 +107,7 @@ TEMPLATES_EN = {
                     "a screen recording.",
     "escalated": "Thank you. I've passed your request to an operator who will contact you shortly.",
     "faq": "{details}",
+    "decision": "{details}",
     "resolved_final": "The issue with {problem} is resolved. {details}",
 }
 
@@ -132,7 +134,7 @@ class Responder:
 
     async def compose(self, facts: ReplyFacts) -> str:
         draft = render_template(facts)
-        if facts.branch == "faq" or not (self.use_llm and self.llm.available):
+        if facts.branch in ("faq", "decision") or not (self.use_llm and self.llm.available):
             return policy.mask_pan(draft) or draft
         text = await self.llm.text(
             SYSTEM_PROMPT.format(language="Ukrainian" if facts.language == "uk" else "English"),

@@ -31,12 +31,16 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
     @router.message(Command("help", "start"))
     async def help_(message: Message) -> None:
         log.info("/help from chat %s (%s)", message.chat.id, message.chat.type)
-        await message.answer("Команди: /incidents, /stats, /simulate " + simulate.SCENARIO_HELP +
+        await message.answer("Команди: /incidents, /stats, /dashboard, /simulate " + simulate.SCENARIO_HELP +
                              f"\nOPERATOR_CHAT_ID цього чату: <code>{message.chat.id}</code>", parse_mode="HTML")
 
     @router.message(Command("stats"))
     async def stats_(message: Message) -> None:
         await message.answer(stats.render(stats.compute(c.db)), parse_mode="HTML")
+
+    @router.message(Command("dashboard"))
+    async def dashboard_(message: Message) -> None:
+        await message.answer(stats.render_dashboard(c.db), parse_mode="HTML")
 
     @router.message(Command("incidents"))
     async def incidents_(message: Message) -> None:

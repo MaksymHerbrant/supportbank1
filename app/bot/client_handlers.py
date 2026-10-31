@@ -5,47 +5,30 @@ import io
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.agent.media import MAX_VIDEO_BYTES, MediaError
+from app.bot import personas
 from app.container import Container
 
 log = logging.getLogger(__name__)
-
-# Demo personas a real Telegram user can "become" (all data is fictional).
-PERSONAS = [
-    ("fuel_late_affected", "⛽ Клієнт з подвійним списанням Fuel+"),
-    ("fuel_late_clean", "⛽ Клієнт Fuel+ без дубля"),
-    ("phish_reporter_3", "🎣 Отримав фішингову SMS"),
-    ("atm_reporter_3", "🏧 Банкомат зʼїв картку"),
-    ("app_reporter_3", "📱 Не проходить оплата в застосунку"),
-    ("fake_screenshot", "🧾 «Підроблений» скріншот"),
-    ("social_eng", "📞 Продиктував код «банку»"),
-    ("faq_user", "❓ Питання з FAQ"),
-]
-DEFAULT_PERSONA = "fuel_late_affected"
-
 
 def build_client_router(c: Container) -> Router:
     router = Router(name="clients")
     router.message.filter(F.chat.type == "private")
 
     def persona_keyboard() -> InlineKeyboardMarkup:
-        rows = []
-        for tag, label in PERSONAS:
-            cid = c.db.scalar("SELECT id FROM customers WHERE demo_tag=?", (tag,))
-            if cid:
-                rows.append([InlineKeyboardButton(text=label, callback_data=f"persona:{cid}")])
+        rows = [[InlineKeyboardButton(text=f"{name} (#{cid})", callback_data=f"persona:{cid}")]
+                for _, cid, name in personas.listing(c.db)]
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def customer_for(chat_id: int) -> int:
         cid = c.db.scalar("SELECT id FROM customers WHERE tg_chat_id=?", (chat_id,))
         if cid:
             return int(cid)
-        cid = c.db.scalar("SELECT id FROM customers WHERE demo_tag=?", (DEFAULT_PERSONA,))
-        c.db.ex("UPDATE customers SET tg_chat_id=NULL WHERE tg_chat_id=?", (chat_id,))
-        c.db.ex("UPDATE customers SET tg_chat_id=? WHERE id=?", (chat_id, cid))
+        cid = personas.customer_by_slug(c.db, personas.DEFAULT_PERSONA)
+        personas.bind(c.db, chat_id, cid)
         return int(cid)
 
     @router.message(CommandStart())
@@ -53,18 +36,27 @@ def build_client_router(c: Container) -> Router:
     async def start(message: Message) -> None:
         await message.answer(
             "Вітаю! Я — AI-асистент підтримки DemoBank (демо, усі дані вигадані).\n"
-            "Оберіть демо-профіль клієнта, від імені якого будете писати:", reply_markup=persona_keyboard())
+            "Оберіть клієнта, від імені якого будете писати (або /demo_login &lt;persona&gt;). "
+            "Проблему не обирайте — просто опишіть її, бот розбереться сам.",
+            reply_markup=persona_keyboard(), parse_mode="HTML")
+
+    @router.message(Command("demo_login"))
+    async def demo_login(message: Message, command: CommandObject) -> None:
+        cid = personas.customer_by_slug(c.db, command.args or "")
+        if cid is None:
+            await message.answer("Використання: /demo_login " + " | ".join(personas.PERSONAS))
+            return
+        name = personas.bind(c.db, message.chat.id, cid)
+        await message.answer(f"Тепер ви — {name} (клієнт #{cid}). Опишіть, що сталося.")
 
     @router.callback_query(F.data.startswith("persona:"))
     async def choose(cb: CallbackQuery) -> None:
         cid = int(cb.data.split(":")[1])
         chat_id = cb.message.chat.id if cb.message else cb.from_user.id
-        c.db.ex("UPDATE customers SET tg_chat_id=NULL WHERE tg_chat_id=?", (chat_id,))
-        c.db.ex("UPDATE customers SET tg_chat_id=? WHERE id=?", (chat_id, cid))
-        name = c.db.scalar("SELECT full_name FROM customers WHERE id=?", (cid,))
+        name = personas.bind(c.db, chat_id, cid)
         await cb.answer()
         if cb.message:
-            await cb.message.answer(f"Тепер ви — {name} (клієнт #{cid}). Опишіть проблему текстом, фото чи відео.")
+            await cb.message.answer(f"Тепер ви — {name} (клієнт #{cid}). Опишіть, що сталося: текстом, фото чи відео.")
 
     async def respond(message: Message, text: str, media=None) -> None:  # noqa: ANN001
         cid = customer_for(message.chat.id)

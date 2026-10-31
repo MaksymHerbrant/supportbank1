@@ -1,6 +1,12 @@
 -- DemoBank schema. All data is fictional.
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS decisions;
+DROP TABLE IF EXISTS credit_charges;
+DROP TABLE IF EXISTS credit_accounts;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS disputes;
+DROP TABLE IF EXISTS refunds;
 DROP TABLE IF EXISTS vectors;
 DROP TABLE IF EXISTS bug_tickets;
 DROP TABLE IF EXISTS escalations;
@@ -27,6 +33,7 @@ CREATE TABLE customers (
     segment     TEXT NOT NULL DEFAULT 'standard',
     tg_chat_id  INTEGER,
     demo_tag    TEXT UNIQUE,
+    kyc_complete INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL
 );
 
@@ -226,4 +233,72 @@ CREATE TABLE vectors (
     metadata_json TEXT NOT NULL DEFAULT '{}',
     embedding     BLOB,
     PRIMARY KEY (collection, id)
+);
+
+-- History used by the deterministic risk profile (app/agent/risk.py).
+CREATE TABLE refunds (
+    id          INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    amount      REAL NOT NULL,
+    reason      TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('approved', 'rejected')),
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE disputes (
+    id          INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    kind        TEXT NOT NULL DEFAULT 'dispute' CHECK (kind IN ('dispute', 'chargeback')),
+    outcome     TEXT NOT NULL CHECK (outcome IN ('open', 'won', 'lost')),
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE devices (
+    id            INTEGER PRIMARY KEY,
+    customer_id   INTEGER NOT NULL REFERENCES customers(id),
+    change_type   TEXT NOT NULL CHECK (change_type IN ('new_device', 'phone_number_changed')),
+    details       TEXT,
+    changed_at    TEXT NOT NULL
+);
+
+CREATE TABLE credit_accounts (
+    id                 INTEGER PRIMARY KEY,
+    customer_id        INTEGER NOT NULL UNIQUE REFERENCES customers(id),
+    card_id            INTEGER REFERENCES cards(id),
+    credit_limit       REAL NOT NULL,
+    balance            REAL NOT NULL,
+    overdue_days       INTEGER NOT NULL DEFAULT 0,
+    missed_payments_6m INTEGER NOT NULL DEFAULT 0,
+    in_restructuring   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE credit_charges (
+    id            INTEGER PRIMARY KEY,
+    account_id    INTEGER NOT NULL REFERENCES credit_accounts(id),
+    customer_id   INTEGER NOT NULL REFERENCES customers(id),
+    kind          TEXT NOT NULL CHECK (kind IN ('fee', 'interest')),
+    description   TEXT NOT NULL,
+    amount        REAL NOT NULL,
+    is_erroneous  INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'charged' CHECK (status IN ('charged', 'refunded')),
+    created_at    TEXT NOT NULL
+);
+
+-- Every money decision: what the LLM proposed and what policy enforced.
+CREATE TABLE decisions (
+    id               INTEGER PRIMARY KEY,
+    ticket_id        INTEGER REFERENCES tickets(id),
+    customer_id      INTEGER NOT NULL,
+    kind             TEXT NOT NULL,
+    llm_decision     TEXT,
+    final_decision   TEXT NOT NULL CHECK (final_decision IN ('auto_approve', 'needs_operator', 'info_only')),
+    security_review  INTEGER NOT NULL DEFAULT 0,
+    risk_level       TEXT NOT NULL,
+    risk_score       INTEGER NOT NULL,
+    factors_json     TEXT NOT NULL DEFAULT '[]',
+    enforced_json    TEXT NOT NULL DEFAULT '[]',
+    reasoning        TEXT,
+    operator_note    TEXT,
+    action_json      TEXT,
+    created_at       TEXT NOT NULL
 );
