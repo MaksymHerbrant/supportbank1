@@ -9,7 +9,9 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.agent.media import MAX_VIDEO_BYTES, MediaError
+from app.agent import policy
 from app.bot import personas
+from app.bot.live_chat import LiveChats
 from app.container import Container
 
 log = logging.getLogger(__name__)
