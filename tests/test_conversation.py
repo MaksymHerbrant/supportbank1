@@ -204,3 +204,11 @@ async def test_contested_normal_charge_goes_to_operator_and_refunds_on_approval(
     assert "Повернено" in result
     assert db.scalar("SELECT status FROM transactions WHERE id=?", (sub_tx,)) == "refunded"
     assert any(cid == 108 and "повернуто" in t for cid, t in notifier.customer_messages)
+
+
+async def test_top_and_action_feed(container) -> None:  # noqa: ANN001
+    from app import stats
+    await container.pipeline.handle(91, "Який ліміт на зняття готівки?")
+    await container.pipeline.handle(89, "Мені дзвонили з банку, я продиктував код з SMS")
+    text = stats.render_top(container.db, "2000-01-01 00:00:00")
+    assert "Топ-3" in text and "block_card" in text

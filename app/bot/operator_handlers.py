@@ -13,7 +13,7 @@ from app.bot import simulate
 from app.bot.cards import TelegramNotifier
 from app.bot.live_chat import LiveChats
 from app.container import Container
-from app.db.repo import money
+from app.db.repo import money, now_ts
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
     @router.message(Command("help", "start"))
     async def help_(message: Message) -> None:
         log.info("/help from chat %s (%s)", message.chat.id, message.chat.type)
-        await message.answer("Команди: /incidents, /stats, /dashboard, /chat <id>, /end, /simulate " + simulate.SCENARIO_HELP +
+        await message.answer("Команди: /incidents, /stats, /dashboard, /top, /chat <id>, /end, /simulate " + simulate.SCENARIO_HELP +
                              f"\nOPERATOR_CHAT_ID цього чату: <code>{message.chat.id}</code>", parse_mode="HTML")
 
     @router.message(Command("stats"))
@@ -58,7 +58,12 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
 
     @router.message(Command("dashboard"))
     async def dashboard_(message: Message) -> None:
-        await message.answer(stats.render_dashboard(c.db), parse_mode="HTML")
+        day = now_ts()[:10] + " 00:00:00"
+        await message.answer(stats.render_dashboard(c.db) + "\n\n" + stats.render_top(c.db, day), parse_mode="HTML")
+
+    @router.message(Command("top"))
+    async def top_(message: Message) -> None:
+        await message.answer(stats.render_top(c.db, now_ts()[:10] + " 00:00:00"), parse_mode="HTML")
 
     @router.message(Command("incidents"))
     async def incidents_(message: Message) -> None:

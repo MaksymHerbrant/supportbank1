@@ -97,3 +97,35 @@ def render_dashboard(db: Database) -> str:
     ]
     lines += [f"  {n}× {reason}" for reason, n in top] or ["  —"]
     return "\n".join(lines)
+
+
+CATEGORY_LABELS = {
+    "double_charge": "подвійне списання", "phishing": "фішинг", "atm_capture": "банкомат забрав картку",
+    "app_payment_error": "збій оплати в застосунку", "refund_demand": "вимога повернення", "dispute": "диспут",
+    "credit_fee": "кредитна комісія", "credit_relief": "відстрочка/кредит", "faq": "питання (FAQ)",
+    "card_lost": "втрата картки", "social_engineering": "соціальна інженерія", "assistant": "розмова з агентом",
+    "other": "інше",
+}
+
+
+def render_top(db: Database, day_start: str) -> str:
+    """Top-3 complaint categories today + the latest AI actions with reasons."""
+    rows = db.q("SELECT category, COUNT(*) AS n FROM tickets WHERE created_at >= ? GROUP BY category "
+                "ORDER BY n DESC LIMIT 3", (day_start,))
+    lines = ["🔝 <b>Топ-3 скарги дня</b>"]
+    lines += [f"{i}. {CATEGORY_LABELS.get(r['category'], r['category'])} — {r['n']}" for i, r in enumerate(rows, 1)] \
+        or ["—"]
+    lines += ["", "🤖 <b>Останні дії AI</b>"]
+    acts = db.q("SELECT action_type, customer_id, amount, reason, created_at FROM actions WHERE actor='agent' "
+                "ORDER BY id DESC LIMIT 8")
+    for a in acts:
+        amount = f" {money(a['amount'])} грн" if a["amount"] else ""
+        lines.append(f"• {a['created_at'][11:16]} #{a['customer_id']} {a['action_type']}{amount} — {a['reason'][:70]}")
+    if not acts:
+        lines.append("—")
+    budget_used = db.scalar("SELECT COALESCE(SUM(amount),0) FROM actions WHERE actor='agent' "
+                            "AND action_type IN ('refund_transaction','refund_credit_charge') AND created_at >= ?",
+                            (day_start,)) or 0
+    from app.agent.decision import DAILY_AUTO_BUDGET_UAH
+    lines += ["", f"💰 Автоповернень сьогодні: {money(float(budget_used))} / {money(DAILY_AUTO_BUDGET_UAH)} грн"]
+    return "\n".join(lines)
