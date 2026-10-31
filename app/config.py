@@ -34,7 +34,7 @@ class Settings(BaseModel):
     goodwill_limit_uah: float = 1000.0         # per contested normal charge
     customer_auto_cap_30d_uah: float = 1000.0  # all automatic refunds per customer in 30 days
     daily_auto_budget_uah: float = 5000.0      # all automatic refunds per day
-    large_amount_uah: float = 10000.0          # always a human from this amount  # client-side rate limit for the Google AI free tier (0 = off)
+    large_amount_uah: float = 10000.0          # always a human from this amount
 
     embed_backend: str = "ollama"  # ollama | google | none
     embed_model: str = "embeddinggemma"
