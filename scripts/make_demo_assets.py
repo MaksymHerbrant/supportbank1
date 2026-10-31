@@ -40,7 +40,7 @@ def phone(lines: list[tuple[str, int, str]], name: str, bg: str = "#f2f2f7") -> 
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     phone([("DemoBank-Info", 34, "#000"), ("SMS · сьогодні 11:02", 24, "#8e8e93"),
-           ("[box]DemoBank: Ваша картка заблокована!\nДля розблокування підтвердіть дані:\nhttps://demobank-secure.top/verify\nТермін — 2 години.", 28, "#000")],
+           ("[box]DemoBank: Ваша картка заблокована!\nДля розблокування підтвердіть дані:\nhttps://demobank-secure.example/verify\nТермін — 2 години.", 28, "#000")],
           "sms_phishing.png")
     phone([("DemoBank · Виписка", 36, "#000"), ("Картка **** 4821", 26, "#8e8e93"),
            ("АЗС Fuel+            −450,00 ₴   12:14:05", 30, "#c00"),

@@ -40,10 +40,10 @@ SCENARIOS: dict[str, list[Step]] = {
     ],
     "phishing": [
         Step("phish_reporter_1", "Прийшла SMS від «банку», я перейшов за посиланням і ввів картку, тепер зняли гроші",
-             "sms_phishing.png", MediaFields(scam_link="demobank-secure.top")),
-        Step("phish_reporter_2", "Шахраї зняли гроші після SMS з посиланням demobank-secure.top"),
+             "sms_phishing.png", MediaFields(scam_link="demobank-secure.example")),
+        Step("phish_reporter_2", "Шахраї зняли гроші після SMS з посиланням demobank-secure.example"),
         Step("phish_reporter_3", "Підозріла SMS з посиланням, це ви надсилали?", "sms_phishing.png",
-             MediaFields(scam_link="demobank-secure.top")),
+             MediaFields(scam_link="demobank-secure.example")),
     ],
     "atm": [
         Step("atm_reporter_1", "Банкомат забрав мою картку, ось фото", "atm_photo.png", MediaFields(atm_id="ATM-0417")),

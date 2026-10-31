@@ -155,7 +155,7 @@ _FLAG_RULES: dict[str, list[str]] = {
 _ATM_RE = re.compile(r"\bATM[-\s]?(\d{3,4})\b", re.I)
 _VERSION_RE = re.compile(r"(?:верс\w*|version|v\.?)\s*(\d+\.\d+(?:\.\d+)?)", re.I)
 _ERROR_RE = re.compile(r"\b(E-[A-Z]{2,5}-\d{3}|ERR_[A-Z_]+|E\d{3,4})\b")
-_DOMAIN_RE = re.compile(r"\b((?:https?://)?(?:[a-z0-9-]+\.)+(?:top|xyz|click|info|ru|site|online|com|net|ua))\b", re.I)
+_DOMAIN_RE = re.compile(r"\b((?:https?://)?(?:[a-z0-9-]+\.)+(?:example|top|xyz|click|info|ru|site|online|com|net|ua))\b", re.I)
 _SAFE_DOMAINS = {"demobank.ua", "demobank.com"}
 
 

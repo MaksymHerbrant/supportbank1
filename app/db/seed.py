@@ -42,7 +42,7 @@ MERCHANTS = [
     ("zdorovia", "Аптека Здоровʼя", "аптека,здоровʼя,zdorovia", "pharmacy", 0, None),
     ("zoria", "Кіно Зоря", "кіно,зоря,zoria", "entertainment", 0, None),
     ("khvylia", "Стрімінг Хвиля", "хвиля,khvylia,стрімінг", "subscription", 0, None),
-    ("scam_secure", "SecurePay-Verify", "securepay,demobank-secure", "p2p", 1, "demobank-secure.top"),
+    ("scam_secure", "SecurePay-Verify", "securepay,demobank-secure", "p2p", 1, "demobank-secure.example"),
 ]
 REGULAR_MERCHANTS = ["kolosok", "zerno", "shvydko", "zdorovia", "zoria", "khvylia"]
 
@@ -143,7 +143,7 @@ def _seed_all(db: Database, rng: random.Random, now) -> None:  # noqa: ANN001
         opened = now - timedelta(minutes=rng.uniform(60, 200))
         db.insert("app_events", {
             "customer_id": cid, "app_version": APP_OK_VERSION, "event_type": "phishing_link_open",
-            "details": "referrer=sms domain=demobank-secure.top", "created_at": ts(opened),
+            "details": "referrer=sms domain=demobank-secure.example", "created_at": ts(opened),
         })
         if cid <= 45:
             tx(cid, "scam_secure", float(rng.choice([2500, 4999, 7200, 9000])),

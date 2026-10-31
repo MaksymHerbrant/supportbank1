@@ -166,6 +166,6 @@ async def test_injection_never_triggers_automatic_actions(db, notifier) -> None:
 async def test_llm_only_fraud_flag_does_not_block_card(db, notifier) -> None:  # noqa: ANN001
     from tests.conftest import make_container
     c = make_container(db, notifier, llm=_flag_everything_llm())
-    reply = await c.pipeline.handle(46, "Підозріла SMS з посиланням demobank-secure.top, це ви надсилали?")
+    reply = await c.pipeline.handle(46, "Підозріла SMS з посиланням demobank-secure.example, це ви надсилали?")
     assert not reply.actions
     assert db.scalar("SELECT COUNT(*) FROM cards WHERE customer_id=46 AND status='blocked'") == 0

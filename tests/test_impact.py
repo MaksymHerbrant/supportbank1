@@ -22,7 +22,7 @@ def test_double_charge_sets(db) -> None:  # noqa: ANN001
 
 
 def test_phishing_sets(db) -> None:  # noqa: ANN001
-    res = impact.compute(db, Signature(category="phishing", scam_domain="demobank-secure.top"))
+    res = impact.compute(db, Signature(category="phishing", scam_domain="demobank-secure.example"))
     assert ids(res.affected) == {42, 43, 44, 45, 108}  # 108: unrecognised charge to the same scam merchant
     assert ids(res.at_risk) == {46, 47}
 
