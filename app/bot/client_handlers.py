@@ -12,6 +12,7 @@ from app.agent.media import MAX_VIDEO_BYTES, MediaError
 from app.agent import policy
 from app.bot import personas
 from app.bot.live_chat import LiveChats
+from app.bot.safe import answer_cb
 from app.container import Container
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ def build_client_router(c: Container) -> Router:
         cid = int(cb.data.split(":")[1])
         chat_id = cb.message.chat.id if cb.message else cb.from_user.id
         name = personas.bind(c.db, chat_id, cid)
-        await cb.answer()
+        await answer_cb(cb)
         if cb.message:
             await cb.message.answer(f"Тепер ви — {name} (клієнт #{cid}). Опишіть, що сталося: текстом, фото чи відео.")
 

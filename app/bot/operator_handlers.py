@@ -12,6 +12,7 @@ from app import stats
 from app.bot import simulate
 from app.bot.cards import TelegramNotifier
 from app.bot.live_chat import LiveChats
+from app.bot.safe import answer_cb
 from app.container import Container
 from app.db.repo import money, now_ts
 
@@ -103,7 +104,7 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
         _, verb, plan_id = cb.data.split(":")
         incident_id = c.db.scalar("SELECT incident_id FROM plans WHERE id=?", (int(plan_id),))
         if verb == "ok":
-            await cb.answer("Виконую план…")
+            await answer_cb(cb, "Виконую план…")
             report = await c.executor.approve_plan(int(plan_id), who(cb))
             if report.already_processed:
                 await cb.message.answer(f"ℹ️ План #{plan_id} вже оброблено (статус: {report.status}). "
@@ -118,7 +119,7 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
                 await cb.message.answer(text, parse_mode="HTML")
         else:
             ok = c.executor.reject_plan(int(plan_id), who(cb))
-            await cb.answer("План відхилено" if ok else "Вже оброблено")
+            await answer_cb(cb, "План відхилено" if ok else "Вже оброблено")
         if incident_id:
             await notifier.incident_changed(int(incident_id))
 
@@ -126,7 +127,7 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
     async def close_cb(cb: CallbackQuery) -> None:
         incident_id = int(cb.data.split(":")[2])
         result = await c.incidents.close(incident_id, who(cb))
-        await cb.answer(result.message, show_alert=not result.ok)
+        await answer_cb(cb, result.message, show_alert=not result.ok)
         if result.ok:
             await cb.message.answer(f"🔒 {html.escape(result.message)}")
 
@@ -134,9 +135,9 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
     async def esc_chat_cb(cb: CallbackQuery) -> None:
         cid = c.db.scalar("SELECT customer_id FROM escalations WHERE id=?", (int(cb.data.split(":")[2]),))
         if cid is None:
-            await cb.answer("Клієнта не знайдено", show_alert=True)
+            await answer_cb(cb, "Клієнта не знайдено", show_alert=True)
             return
-        await cb.answer("Чат відкрито")
+        await answer_cb(cb, "Чат відкрито")
         await open_chat(int(cid), who(cb), cb.message)
 
     @router.message(Command("chat"))
@@ -178,7 +179,7 @@ def build_operator_router(c: Container, notifier: TelegramNotifier) -> Router:
     async def esc_cb(cb: CallbackQuery) -> None:
         _, verb, esc_id = cb.data.split(":")
         msg = await c.executor.decide_escalation(int(esc_id), verb in ("ok", "take"), who(cb))
-        await cb.answer(msg[:190], show_alert=True)
+        await answer_cb(cb, msg[:190], show_alert=True)
         await notifier.refresh_escalation(int(esc_id))
 
     return router

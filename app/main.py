@@ -95,7 +95,11 @@ async def run() -> int:
         log.error("BOT_TOKEN is not set. Copy .env.example to .env and fill it in (or run with --check).")
         return 2
     db = _open_db(settings.db_path)
-    bot = Bot(settings.bot_token, default=DefaultBotProperties(link_preview_is_disabled=True))
+    from aiogram.client.session.aiohttp import AiohttpSession
+
+    # Short request timeout: a dropped long-poll connection recovers in ~25 s instead of ~100 s.
+    bot = Bot(settings.bot_token, session=AiohttpSession(timeout=25),
+              default=DefaultBotProperties(link_preview_is_disabled=True))
     notifier = TelegramNotifier(bot, db, settings.operator_chat_id, settings.dev_chat_id)
     container = build(settings, db, notifier)
     await container.faq.index()
