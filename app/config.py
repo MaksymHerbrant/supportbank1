@@ -27,7 +27,14 @@ class Settings(BaseModel):
     gemini_api_key: str = ""
     llm_timeout_s: float = 45.0
     llm_retries: int = 2
-    llm_rpm: int = 14  # client-side rate limit for the Google AI free tier (0 = off)
+    llm_rpm: int = 14
+    # Autonomy limits for automatic refunds/compensation (UAH)
+    auto_refund_limit_uah: float = 500.0       # per transaction (confirmed duplicate)
+    auto_credit_comp_limit_uah: float = 500.0  # per credit fee compensation
+    goodwill_limit_uah: float = 1000.0         # per contested normal charge
+    customer_auto_cap_30d_uah: float = 1000.0  # all automatic refunds per customer in 30 days
+    daily_auto_budget_uah: float = 5000.0      # all automatic refunds per day
+    large_amount_uah: float = 10000.0          # always a human from this amount  # client-side rate limit for the Google AI free tier (0 = off)
 
     embed_backend: str = "ollama"  # ollama | google | none
     embed_model: str = "embeddinggemma"
@@ -62,6 +69,12 @@ def get_settings() -> Settings:
         "llm_timeout_s": _env("LLM_TIMEOUT_S", "45"),
         "llm_retries": _env("LLM_RETRIES", "2"),
         "llm_rpm": _env("LLM_RPM", "14"),
+        "auto_refund_limit_uah": _env("AUTO_REFUND_LIMIT_UAH", "500"),
+        "auto_credit_comp_limit_uah": _env("AUTO_CREDIT_COMP_LIMIT_UAH", "500"),
+        "goodwill_limit_uah": _env("GOODWILL_LIMIT_UAH", "1000"),
+        "customer_auto_cap_30d_uah": _env("CUSTOMER_AUTO_CAP_30D_UAH", "1000"),
+        "daily_auto_budget_uah": _env("DAILY_AUTO_BUDGET_UAH", "5000"),
+        "large_amount_uah": _env("LARGE_AMOUNT_UAH", "10000"),
         "embed_backend": _env("EMBED_BACKEND", "ollama"),
         "embed_model": _env("EMBED_MODEL", "embeddinggemma"),
         "embed_fallback_model": _env("EMBED_FALLBACK_MODEL", "nomic-embed-text"),

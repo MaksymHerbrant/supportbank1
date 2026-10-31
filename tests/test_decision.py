@@ -149,3 +149,19 @@ def test_risk_profiles_on_seed(db) -> None:  # noqa: ANN001
     names = {f.name for f in assess(db, 103)[1].factors}
     assert "device_or_phone_changed_48h" in names
     assert FORBIDDEN_CUSTOMER_PHRASES  # list is configured
+
+
+def test_customer_30d_cap_and_daily_budget_block_auto() -> None:
+    c = ctx(amount=300)
+    c.customer_auto_30d = 900  # 900 + 300 > 1000
+    fd = enforce(decision("auto_approve"), c)
+    assert fd.decision == "needs_operator" and any("30 днів" in e for e in fd.enforced)
+    c = ctx(amount=300)
+    c.daily_auto_total = 4900  # 4900 + 300 > 5000
+    fd = enforce(decision("auto_approve"), c)
+    assert fd.decision == "needs_operator" and any("денний бюджет" in e for e in fd.enforced)
+
+
+def test_duplicate_over_500_needs_operator() -> None:
+    assert enforce(decision("auto_approve"), ctx(amount=520)).decision == "needs_operator"
+    assert enforce(decision("auto_approve"), ctx(amount=450)).decision == "auto_approve"

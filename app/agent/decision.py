@@ -16,15 +16,19 @@ from pydantic import BaseModel, Field
 
 from app.agent import policy
 from app.agent.risk import CustomerProfile, RiskAssessment, assess
-from app.db.repo import Database, dumps, money, now_ts
+from app.config import get_settings
+from app.db.repo import Database, ago, dumps, money, now_ts
 from app.llm import LLMClient
 
 log = logging.getLogger(__name__)
 
-AUTO_REFUND_LIMIT_UAH = 2000.0
-AUTO_CREDIT_COMP_LIMIT_UAH = 500.0
+_S = get_settings()
+AUTO_REFUND_LIMIT_UAH = _S.auto_refund_limit_uah
+AUTO_CREDIT_COMP_LIMIT_UAH = _S.auto_credit_comp_limit_uah
 # Goodwill: a normal charge the customer contests (service not delivered, charged after cancelling...).
-GOODWILL_LIMIT_UAH = 1000.0
+GOODWILL_LIMIT_UAH = _S.goodwill_limit_uah
+CUSTOMER_AUTO_CAP_30D_UAH = _S.customer_auto_cap_30d_uah
+DAILY_AUTO_BUDGET_UAH = _S.daily_auto_budget_uah
 GOODWILL_COOLDOWN_DAYS = 30
 STRENGTH = {"auto_approve": 0, "info_only": 1, "needs_operator": 2}
 # Customer messages must never reveal suspicion or scoring.
@@ -83,6 +87,8 @@ class DecisionContext:
     risk_flags: list[str] = field(default_factory=list)
     possible_incident: bool = False
     recent_goodwill: bool = False
+    customer_auto_30d: float = 0.0   # automatic refunds already given to this customer in 30 days
+    daily_auto_total: float = 0.0    # automatic refunds given to everyone today
     language: str = "uk"
     profile: CustomerProfile | None = None
     risk: RiskAssessment | None = None
@@ -133,6 +139,12 @@ def enforce(llm: LLMDecision | None, ctx: DecisionContext, llm_available: bool =
         blockers.append("немає дії, підтвердженої даними")
     elif ctx.proposed.amount > ctx.limit:
         blockers.append(f"сума {money(ctx.proposed.amount)} грн > ліміту {money(ctx.limit)} грн")
+    if ctx.proposed is not None:
+        if ctx.customer_auto_30d + ctx.proposed.amount > CUSTOMER_AUTO_CAP_30D_UAH:
+            blockers.append(f"ліміт автоповернень клієнта {money(CUSTOMER_AUTO_CAP_30D_UAH)} грн/30 днів "
+                            f"(вже {money(ctx.customer_auto_30d)} грн)")
+        if ctx.daily_auto_total + ctx.proposed.amount > DAILY_AUTO_BUDGET_UAH:
+            blockers.append(f"денний бюджет автоповернень {money(DAILY_AUTO_BUDGET_UAH)} грн вичерпано")
     if risk.level != "low":
         blockers.append(f"ризик {risk.level} ({risk.score})")
     if ctx.credit_question and ctx.profile.overdue_days > 0:
@@ -201,6 +213,10 @@ class DecisionEngine:
         # A contested normal charge does not contradict the data (the charge exists), so it is not a mismatch.
         mismatch = not ctx.data_confirmed and ctx.kind != "refund_claim"
         ctx.profile, ctx.risk = assess(self.db, ctx.customer_id, claim_data_mismatch=mismatch)
+        auto_sql = ("SELECT COALESCE(SUM(amount), 0) FROM actions WHERE actor='agent' "
+                    "AND action_type IN ('refund_transaction','refund_credit_charge') AND created_at >= ?")
+        ctx.customer_auto_30d = float(self.db.scalar(auto_sql + " AND customer_id=?", (ago(days=30), ctx.customer_id)))
+        ctx.daily_auto_total = float(self.db.scalar(auto_sql, (now_ts()[:10] + " 00:00:00",)))
         llm_out: LLMDecision | None = None
         available = self.llm.available
         if available:
@@ -210,13 +226,16 @@ class DecisionEngine:
                 "data_confirmed": ctx.data_confirmed,
                 "evidence_from_db": ctx.evidence,
                 "proposed_action": ctx.proposed.model_dump() if ctx.proposed else None,
-                "limits": {"auto_refund_uah": AUTO_REFUND_LIMIT_UAH, "auto_credit_compensation_uah": AUTO_CREDIT_COMP_LIMIT_UAH},
+                "limits": {"auto_refund_uah": AUTO_REFUND_LIMIT_UAH,
+                           "auto_credit_compensation_uah": AUTO_CREDIT_COMP_LIMIT_UAH},
                 "risk_level": ctx.risk.level, "risk_score": ctx.risk.score,
                 "risk_factors": [f.model_dump() for f in ctx.risk.factors],
                 "credit": {"has_credit": ctx.profile.has_credit, "balance": ctx.profile.credit_balance,
                            "overdue_days": ctx.profile.overdue_days, "in_restructuring": ctx.profile.in_restructuring},
                 "risk_flags": ctx.risk_flags, "possible_mass_incident": ctx.possible_incident,
                 "recent_goodwill": ctx.recent_goodwill, "goodwill_limit_uah": GOODWILL_LIMIT_UAH,
+                "customer_auto_refunds_30d_uah": ctx.customer_auto_30d,
+                "customer_cap_30d_uah": CUSTOMER_AUTO_CAP_30D_UAH,
                 "customer_language": ctx.language,
             }
             llm_out = await self.llm.structured(SYSTEM_PROMPT, f"Контекст:\n{dumps(context)}", LLMDecision,

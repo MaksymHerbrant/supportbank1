@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from enum import IntEnum
 
+from app.config import get_settings
 from app.db.repo import Database
 
 
@@ -28,7 +29,7 @@ CONFIDENCE_MIN = 0.7
 # Only critical situations go to a human. Soft signals (angry, repeat contact, low model confidence) are handled
 # by the agent itself: it de-escalates and asks clarifying questions.
 FORCE_HUMAN_FLAGS = frozenset({"fraud", "legal", "social_engineering"})
-LARGE_AMOUNT_UAH = 10_000.0
+LARGE_AMOUNT_UAH = get_settings().large_amount_uah
 
 CATEGORIES = (
     "faq", "card_lost", "atm_capture", "double_charge", "phishing", "app_payment_error",
