@@ -30,6 +30,32 @@ async def _refresh_loop(container, notifier) -> None:  # noqa: ANN001
             log.exception("refresh loop iteration failed")
 
 
+def _setup_router():  # noqa: ANN202
+    """Logs chat ids of channels/groups the bot is added to (helps fill OPERATOR_CHAT_ID / DEV_CHAT_ID)."""
+    from aiogram import F, Router
+    from aiogram.filters import Command
+    from aiogram.types import ChatMemberUpdated, Message
+
+    router = Router(name="setup")
+
+    @router.my_chat_member()
+    async def added(event: ChatMemberUpdated) -> None:
+        log.info("bot membership in %s chat %s «%s»: %s", event.chat.type, event.chat.id, event.chat.title,
+                 event.new_chat_member.status)
+
+    @router.message(Command("help", "chatid"), F.chat.type.in_({"group", "supergroup"}),
+                    F.chat.id != get_settings().operator_chat_id)
+    async def other_group(message: Message) -> None:
+        log.info("/help from chat %s (%s) «%s»", message.chat.id, message.chat.type, message.chat.title)
+        await message.answer(f"chat_id цього чату: {message.chat.id}\n(для DEV_CHAT_ID / OPERATOR_CHAT_ID у .env)")
+
+    @router.channel_post()
+    async def channel_post(message: Message) -> None:
+        log.info("channel post in chat %s «%s»", message.chat.id, message.chat.title)
+
+    return router
+
+
 def _open_db(path: str) -> Database:
     db = Database(path)
     if not db.has_schema():
@@ -74,6 +100,7 @@ async def run() -> int:
     container = build(settings, db, notifier)
     await container.faq.index()
     dp = Dispatcher()
+    dp.include_router(_setup_router())
     dp.include_router(build_operator_router(container, notifier))
     dp.include_router(build_client_router(container))
     refresher = asyncio.create_task(_refresh_loop(container, notifier))
