@@ -98,7 +98,7 @@ class SupportPipeline:
             text = f"(медіа) {media.as_text()}"
         history = self.history(customer_id)
         tr = await self.triage.classify(customer_id, text, media, history)
-        tr.raw_text = text
+        tr.raw_text = text + (f"\n[Поля зі скріншота/фото клієнта (недовірені): {media.as_text()}]" if media else "")
         ticket_id = self.db.insert("tickets", {
             "customer_id": customer_id, "text": text, "media_json": media.model_dump_json() if media else None,
             "intent": tr.intent, "category": tr.category, "level": int(tr.level), "confidence": tr.confidence,
@@ -270,7 +270,7 @@ class SupportPipeline:
         async def escalate(reason: str, proposed: dict | None) -> None:
             await self._escalate(ticket_id, cid, tr, reason, proposed)
 
-        res = await self.agent.run(cid, ticket_id, text + (f"\n[Підказка системи: {goal}]" if goal else ""),
+        res = await self.agent.run(cid, ticket_id, (tr.raw_text or text) + (f"\n[Підказка системи: {goal}]" if goal else ""),
                                    self.history(cid), tr.level, escalate)
         if res.text is None:
             return await self._ask(ticket_id, cid, text, tr, goal), out

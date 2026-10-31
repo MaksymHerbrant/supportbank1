@@ -118,3 +118,30 @@ async def test_agent_tools_refund_only_real_duplicate(db, notifier) -> None:  # 
     refunded = {r[0] for r in db.q("SELECT json_extract(params_json,'$.tx_id') FROM actions "
                                    "WHERE action_type='refund_transaction'")}
     assert refunded == {dup_tx}  # the subscription was NOT refunded
+
+
+async def test_contested_normal_charge_goes_to_operator_and_refunds_on_approval(db, notifier) -> None:  # noqa: ANN001
+    from app.llm import LLMClient, LLMResponse, ToolCall
+    from tests.conftest import FakeBackend, make_container
+    sub_tx = db.scalar("SELECT id FROM transactions WHERE customer_id=108 AND merchant_id='khvylia'")
+    script = iter([[ToolCall("request_refund", {"tx_id": sub_tx, "reason": "списали після скасування"})],
+                   [ToolCall("reply_to_customer", {"text": "Передав запит фахівцю, він підтвердить повернення."})]])
+
+    def respond(messages, tools):  # noqa: ANN001, ANN202
+        names = {t.name for t in tools or []}
+        if "reply_to_customer" in names:
+            return LLMResponse(tool_calls=next(script))
+        if "submit_decision" in names:
+            return LLMResponse(tool_calls=[ToolCall("submit_decision", {"decision": "auto_approve",
+                                                                        "customer_message": "ok"})])
+        return LLMResponse(text="")
+    c = make_container(db, notifier, llm=LLMClient(FakeBackend(respond)))
+    reply = await c.pipeline.handle(108, "Поверніть 199 за підписку, вона списалась хоча я скасував")
+    assert reply.escalated
+    assert db.scalar("SELECT COUNT(*) FROM actions WHERE action_type='refund_transaction'") == 0  # not auto
+    esc = db.q1("SELECT * FROM escalations WHERE customer_id=108 AND proposed_json IS NOT NULL")
+    assert db.scalar("SELECT final_decision FROM decisions WHERE customer_id=108") == "needs_operator"
+    result = await c.executor.decide_escalation(esc["id"], True, "operator")
+    assert "Повернено" in result
+    assert db.scalar("SELECT status FROM transactions WHERE id=?", (sub_tx,)) == "refunded"
+    assert any(cid == 108 and "повернуто" in t for cid, t in notifier.customer_messages)

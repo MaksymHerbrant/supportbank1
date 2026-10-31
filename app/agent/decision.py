@@ -67,7 +67,7 @@ class LLMDecision(BaseModel):
 
 @dataclass
 class DecisionContext:
-    kind: Literal["refund_duplicate", "credit_fee", "credit_relief"]
+    kind: Literal["refund_duplicate", "refund_claim", "credit_fee", "credit_relief"]
     customer_id: int
     ticket_id: int | None
     claim_text: str
