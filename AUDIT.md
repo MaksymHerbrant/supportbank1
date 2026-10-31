@@ -30,16 +30,16 @@
 | policy.enforce лише посилює рішення | ✅ (тест на всіх комбінаціях) | [app/agent/decision.py:119](app/agent/decision.py#L119) |
 | risk.py: профіль, ваги в конфігу, low/medium/high, без персональних ознак | ✅ ваги в `RISK_WEIGHTS` (код, не .env) | [app/agent/risk.py:16](app/agent/risk.py#L16), [:30](app/agent/risk.py#L30) |
 | decision.py: строгий JSON, нейтральне customer_message | ✅ | [app/agent/decision.py:31](app/agent/decision.py#L31) |
-| Ліміти 500 грн/транзакція, 1000 грн/клієнт/30 днів, денний бюджет, бюджет інциденту, circuit breaker — усе в .env | ⚠️ було: ліміти константами в коді (2 000/дубль, 500/кредит, goodwill 1 000 раз на 30 днів), денного бюджету й бюджету інциденту немає; circuit breaker — у коді | [app/agent/decision.py:24](app/agent/decision.py#L24) |
+| Ліміти 500 грн/транзакція, 1000 грн/клієнт/30 днів, денний бюджет, бюджет інциденту, circuit breaker — усе в .env | ✅ після виправлення 1: 500/дубль, 500/кредит, goodwill 1 000/операцію, 1 000/клієнт/30 днів, денний бюджет 5 000 — у .env · ⚠️ бюджету інциденту немає (масові плани завжди через оператора), час circuit breaker — у коді | [app/agent/decision.py:24](app/agent/decision.py#L24) |
 | detector: гібрид signature + вектори | ✅ | [app/incidents/detector.py:28](app/incidents/detector.py#L28) |
 | linker: гілки a–d | ✅ | [app/incidents/linker.py:113](app/incidents/linker.py#L113) |
 | impact: affected лише через SQL | ✅ | [app/incidents/impact.py:176](app/incidents/impact.py#L176) |
 | planner / executor: аудит, ідемпотентність | ✅ | [app/incidents/planner.py:52](app/incidents/planner.py#L52), [app/actions/executor.py:72](app/actions/executor.py#L72) |
 | Векторне сховище без сервера, faq_rag ескалює | ✅ SQLite + numpy; без фрагмента агент спершу уточнює, після 3 спроб ескалює | [app/vector/store.py:25](app/vector/store.py#L25), [app/agent/faq_rag.py:97](app/agent/faq_rag.py#L97) |
 | alerter SEV1/2/3, повтор до «Беру в роботу», GitHub Issue | ❌ є лише баг-тікет з severity/priority (P0–P3) у канал розробників | [app/bot/cards.py:208](app/bot/cards.py#L208) |
-| dashboard: KPI, топ-3 скарги дня, стрічка дій AI, гроші і бюджет, інциденти, автооновлення | ⚠️ `/stats` (KPI), `/dashboard` (рішення, причини ескалації), `/incidents`; топ-3 скарг і стрічки дій AI немає, вебверсії немає | [app/stats.py:27](app/stats.py#L27), [:67](app/stats.py#L67) |
-| bank_sim: /break, /fix, /reset_demo, /simulate, /demo_login, вебекран, фішинг лише `.example` | ⚠️ є `/simulate` (7 сценаріїв + reset), `/demo_login` (22 персонажі); немає /break, /fix, вебекрану; фішинговий домен `demobank-secure.example` (реальна TLD) | [app/bot/simulate.py:69](app/bot/simulate.py#L69), [app/bot/personas.py:8](app/bot/personas.py#L8), [app/db/seed.py:45](app/db/seed.py#L45) |
-| Три чати Telegram, кнопки, /stats, /top, /incidents | ⚠️ клієнт ✅, оператори ✅ (+ живий чат, /dashboard), `/top` немає; група розробників не підключена (тікети йдуть операторам) | [app/bot/](app/bot/) |
+| dashboard: KPI, топ-3 скарги дня, стрічка дій AI, гроші і бюджет, інциденти, автооновлення | ⚠️ після виправлення 3: `/dashboard` = рішення + топ-3 скарг дня + стрічка дій AI з reason + денний бюджет; `/top`, `/stats`, `/incidents`; картки інцидентів оновлюються наживо · вебверсії з автооновленням немає | [app/stats.py:27](app/stats.py#L27), [:67](app/stats.py#L67) |
+| bank_sim: /break, /fix, /reset_demo, /simulate, /demo_login, вебекран, фішинг лише `.example` | ⚠️ є `/simulate` (7 сценаріїв + reset), `/demo_login` (22 персонажі); немає /break, /fix, вебекрану; фішинговий домен `demobank-secure.example` (виправлення 2) | [app/bot/simulate.py:69](app/bot/simulate.py#L69), [app/bot/personas.py:8](app/bot/personas.py#L8), [app/db/seed.py:45](app/db/seed.py#L45) |
+| Три чати Telegram, кнопки, /stats, /top, /incidents | ⚠️ клієнт ✅, оператори ✅ (+ живий чат, /dashboard, /top); група розробників не підключена (тікети йдуть операторам) | [app/bot/](app/bot/) |
 | README українською (проблема, affected vs at_risk, формула лімітів, mermaid, запуск, демо, безпека, тести) | ✅ | [README.md](README.md) |
 | Понад еталон: AI-агент з інструментами (уточнює, яке списання; диспут; скасування підписки; goodwill), живий чат з оператором | ✅ | [app/agent/assistant.py:89](app/agent/assistant.py#L89) |
 
@@ -90,6 +90,25 @@
 | Technical Execution | 101 тест, policy в коді, аудит, ідемпотентність, graceful degradation | легітимні повтори = дубль | ліміти (виправлення 1) |
 | Presentation & Demo | `/simulate`, `/demo_login`, шпаргалка, офлайн-демо | ліміт квоти 14 RPM → затримки | заздалегідь `/simulate reset` |
 
-## 6. Виправлення
+## 6. Виправлення (зроблено)
 
-_(оновлюється нижче)_
+| # | Коміт | Що | Перевірка |
+|---|---|---|---|
+| 1 (P0) | `fix(audit): autonomy limits in .env …` | ліміти в `.env`: 500 грн/дубль, 1 000 грн/клієнт/30 днів сумарно, денний бюджет 5 000 грн; нові блокери в `enforce`. Обмежує шкоду від сценарію L (легітимні повтори = дубль) | 2 нові тести; demo_check без регресій |
+| 2 (P1) | `fix(audit): phishing demo domain on reserved .example TLD` | `demobank-secure.top` → `demobank-secure.example` (seed, сценарії, картинки, тести, документи) | pytest, demo_check |
+| 3 (P1) | `fix(audit): /top … AI action feed …` | `/top` і `/dashboard`: топ-3 скарги дня, стрічка останніх дій AI з reason, використання денного бюджету | новий тест |
+
+Після виправлень: **pytest 104 passed**, **demo_check ✅26 ⚠️4 ❌1**. ❌ L лишається: потрібні retry-логи (нова фіча),
+ризик обмежено лімітами з виправлення 1.
+
+### Свідомо не робимо до дедлайну
+
+| P | Що | Чому |
+|---|---|---|
+| P1 | retry-логи для сценарію L | нова модель даних, 30+ хв; ризик закритий лімітами |
+| P1 | алертер SEV1/2/3 з повтором до «Беру в роботу», GitHub Issue | нова фіча (~45 хв); зараз баг-тікет із severity/priority + картка інциденту наживо |
+| P1 | `/break`, `/fix`, вебекран банку, вебдашборд з автооновленням | нові фічі (1–2 год); замість них `/simulate` і Telegram-дашборд |
+| P1 | бюджет інциденту (`INCIDENT_AUTO_BUDGET`) | масові плани й так завжди через оператора (суворіше) |
+| P2 | `DEV_CHAT_ID` | потрібна дія людини: `/chatid` у групі розробників |
+| P2 | ffmpeg на демо-машині | `brew install ffmpeg` |
+| P2 | ваги ризику в .env | зараз у `RISK_WEIGHTS` у коді, легко змінити |
