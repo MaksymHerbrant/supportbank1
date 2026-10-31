@@ -19,7 +19,7 @@ from app.vector.store import VectorStore
 log = logging.getLogger(__name__)
 RESOLVED_GRACE_H = 24
 CATEGORY_ONLY_SCORE = 0.75
-ESCALATE_FLAGS = {"fraud", "legal", "angry", "repeat_contact", "social_engineering", "vip_pressure", "unverified_claim"}
+ESCALATE_FLAGS = {"fraud", "legal", "social_engineering", "vip_pressure"}  # + insisting against the data
 
 
 @dataclass

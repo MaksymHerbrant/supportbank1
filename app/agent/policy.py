@@ -25,7 +25,10 @@ class PolicyViolation(Exception):
 
 
 CONFIDENCE_MIN = 0.7
-FORCE_HUMAN_FLAGS = frozenset({"fraud", "legal", "angry", "repeat_contact", "social_engineering"})
+# Only critical situations go to a human. Soft signals (angry, repeat contact, low model confidence) are handled
+# by the agent itself: it de-escalates and asks clarifying questions.
+FORCE_HUMAN_FLAGS = frozenset({"fraud", "legal", "social_engineering"})
+LARGE_AMOUNT_UAH = 10_000.0
 
 CATEGORIES = (
     "faq", "card_lost", "atm_capture", "double_charge", "phishing", "app_payment_error",
@@ -66,9 +69,10 @@ PLAN_ACTIONS = frozenset({"refund_transaction", "block_card", "order_card_reissu
 
 def finalize_level(llm_level: int | None, category: str, confidence: float, risk_flags: set[str]) -> Level:
     """Combine model output with hard rules. Rules can only raise the level."""
-    level = Level(max(1, min(4, int(llm_level or 4))))
+    # The model may raise the level up to 3; level 4 (human only) is decided by hard rules, not by the model.
+    level = Level(max(1, min(3, int(llm_level or 3))))
     level = max(level, CATEGORY_MIN_LEVEL.get(category, Level.INVESTIGATE))
-    if confidence < CONFIDENCE_MIN or risk_flags & FORCE_HUMAN_FLAGS:
+    if risk_flags & FORCE_HUMAN_FLAGS:
         level = Level.HUMAN
     return Level(level)
 

@@ -121,10 +121,14 @@ async def test_responder_falls_back_when_llm_promises_refund() -> None:
     assert "щойно кошти буде повернуто" in text
 
 
-def test_low_confidence_and_risk_flags_force_human() -> None:
-    assert policy.finalize_level(1, "faq", 0.5, set()) == Level.HUMAN
-    for flag in ("fraud", "legal", "angry", "repeat_contact", "social_engineering"):
+def test_only_critical_flags_force_human() -> None:
+    for flag in ("fraud", "legal", "social_engineering"):
         assert policy.finalize_level(1, "faq", 0.99, {flag}) == Level.HUMAN
+    # Soft signals are handled by the agent (clarify / de-escalate), not handed off.
+    for flag in ("angry", "repeat_contact"):
+        assert policy.finalize_level(1, "faq", 0.99, {flag}) != Level.HUMAN
+    assert policy.finalize_level(1, "faq", 0.3, set()) != Level.HUMAN
+    assert policy.finalize_level(4, "other", 0.9, set()) == Level.INVESTIGATE  # the model alone cannot hand off
     assert policy.finalize_level(1, "double_charge", 0.95, set()) == Level.INVESTIGATE  # rules raise, never lower
 
 

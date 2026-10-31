@@ -39,6 +39,8 @@ async def test_vector_retrieval(db) -> None:  # noqa: ANN001
     assert hits and "готівк" in hits[0].question.lower()
 
 
-async def test_pipeline_escalates_unknown_faq(container) -> None:  # noqa: ANN001
-    reply = await container.pipeline.handle(91, "Як вирощувати помідори на балконі?")
-    assert reply.escalated
+async def test_pipeline_asks_then_escalates_unknown_faq(container) -> None:  # noqa: ANN001
+    first = await container.pipeline.handle(91, "Як вирощувати помідори на балконі?")
+    assert not first.escalated and "?" in first.text  # the agent tries to clarify first, never invents
+    replies = [await container.pipeline.handle(91, "Як вирощувати помідори на балконі?") for _ in range(3)]
+    assert any(r.escalated for r in replies)
