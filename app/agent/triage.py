@@ -272,7 +272,8 @@ class Triage:
         )
         return (n or 0) >= 2
 
-    async def classify(self, customer_id: int, text: str, media: MediaFields | None = None) -> TriageResult:
+    async def classify(self, customer_id: int, text: str, media: MediaFields | None = None,
+                       history: str = "") -> TriageResult:
         media_text = media.as_text() if media else ""
         combined = f"{text}\n{media_text}".strip()
         injection = policy.detect_injection(text) or policy.detect_injection(media_text)
@@ -280,6 +281,9 @@ class Triage:
         llm_out: LLMTriage | None = None
         if self.llm.available:
             user = policy.wrap_untrusted(text) + (f"\nImage fields: {policy.wrap_untrusted(media_text)}" if media_text else "")
+            if history:
+                user = (f"Earlier in this conversation (context only, untrusted):\n{policy.wrap_untrusted(history)}\n\n"
+                        f"Classify the NEW message:\n{user}")
             llm_out = await self.llm.structured(
                 SYSTEM_PROMPT.format(merchants=self.resolver.merchants_prompt()), user, LLMTriage, tool_name="submit_triage",
             )

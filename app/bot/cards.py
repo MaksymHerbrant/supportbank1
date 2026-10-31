@@ -114,7 +114,9 @@ def render_escalation(db: Database, esc_id: int) -> tuple[str, InlineKeyboardMar
     else:
         buttons = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="👤 Взяти в роботу", callback_data=f"esc:take:{esc_id}")]])
-    return "\n".join(lines)[:4000], buttons
+    chat_btn = [InlineKeyboardButton(text="💬 Підключитися до чату", callback_data=f"esc:chat:{esc_id}")]
+    rows = (buttons.inline_keyboard if buttons else []) + [chat_btn]
+    return "\n".join(lines)[:4000], InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _risk_lines(db: Database, customer_id: int | None, decision_id: int | None) -> list[str]:

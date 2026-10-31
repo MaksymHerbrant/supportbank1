@@ -1,6 +1,8 @@
 -- DemoBank schema. All data is fictional.
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS relay_messages;
+DROP TABLE IF EXISTS live_chats;
 DROP TABLE IF EXISTS decisions;
 DROP TABLE IF EXISTS credit_charges;
 DROP TABLE IF EXISTS credit_accounts;
@@ -300,5 +302,24 @@ CREATE TABLE decisions (
     reasoning        TEXT,
     operator_note    TEXT,
     action_json      TEXT,
+    created_at       TEXT NOT NULL
+);
+
+-- Human handoff: an operator talks to the customer through the bot.
+CREATE TABLE live_chats (
+    id            INTEGER PRIMARY KEY,
+    customer_id   INTEGER NOT NULL REFERENCES customers(id),
+    operator_name TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    started_at    TEXT NOT NULL,
+    ended_at      TEXT
+);
+
+-- Which customer a message in the operator group belongs to (for reply-based routing).
+CREATE TABLE relay_messages (
+    group_message_id INTEGER PRIMARY KEY,
+    customer_id      INTEGER NOT NULL REFERENCES customers(id),
+    direction        TEXT NOT NULL CHECK (direction IN ('to_operator', 'to_customer', 'card')),
+    text             TEXT,
     created_at       TEXT NOT NULL
 );
