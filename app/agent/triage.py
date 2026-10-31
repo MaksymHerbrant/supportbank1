@@ -100,6 +100,7 @@ class TriageResult(BaseModel):
     injection_detected: bool = False
     # Flags found by deterministic rules (not the LLM): only these may trigger protective actions.
     rule_flags: list[str] = Field(default_factory=list)
+    raw_text: str = Field("", exclude=True)  # the customer's message (masked), for downstream checks
     source: str = "rules"  # llm | rules
 
 
@@ -306,6 +307,8 @@ class Triage:
         else:
             category, confidence, intent, llm_level, source = rule_cat, rule_conf, rule_cat, None, "rules"
             language = detect_language(text)
+        if category == "social_engineering" and rule_cat != "social_engineering":
+            category = "other"  # model-only suspicion: the agent investigates the data instead of handing off
         if category == "social_engineering":
             flags.add("social_engineering")
         if rule_cat == "social_engineering":
@@ -333,7 +336,8 @@ class Triage:
         # Without an LLM, no level proposal exists: start from the category minimum.
         if llm_level is None:
             llm_level = int(policy.CATEGORY_MIN_LEVEL.get(category, Level.INVESTIGATE))
-        level = policy.finalize_level(llm_level, category, confidence, flags)
+        # Only deterministic evidence (or an explicit legal threat) can force a human; model guesses cannot.
+        level = policy.finalize_level(llm_level, category, confidence, deterministic | (flags & {"legal"}))
         result = TriageResult(
             intent=intent[:120], category=category, level=level, confidence=round(confidence, 2),
             risk_flags=sorted(flags), signature=sig, language=language, injection_detected=injection, source=source,

@@ -74,6 +74,7 @@ def seed(db: Database, rng_seed: int = 42) -> None:
     try:
         _seed_all(db, rng, now)
         _seed_risk_personas(db, rng, now)
+        _seed_agent_personas(db, rng, now)
         db.ex("COMMIT")
     except Exception:
         db.ex("ROLLBACK")
@@ -259,6 +260,35 @@ def _seed_risk_personas(db: Database, rng: random.Random, now) -> None:  # noqa:
         db.insert("credit_charges", {"account_id": acc_ids[cid], "customer_id": cid, "kind": kind,
                                      "description": desc, "amount": amount, "is_erroneous": wrong,
                                      "created_at": ts(now - timedelta(days=2))})
+
+
+def _seed_agent_personas(db: Database, rng: random.Random, now) -> None:  # noqa: ANN001
+    """Two customers whose problems need a real conversation (several candidate charges)."""
+    people = [(107, "sofia", "Софія Ткачук", 700), (108, "andriy", "Андрій Савчук", 1200)]
+    cards = {}
+    for cid, tag, name, tenure in people:
+        db.insert("customers", {"id": cid, "full_name": name, "phone": f"+38063{rng.randint(1000000, 9999999)}",
+                                "demo_tag": tag, "created_at": ts(now - timedelta(days=tenure))})
+        cards[cid] = db.insert("cards", {"customer_id": cid, "last4": f"{rng.randint(0, 9999):04d}"})
+        for _ in range(10):
+            db.insert("transactions", {"customer_id": cid, "card_id": cards[cid],
+                                       "merchant_id": rng.choice(["kolosok", "shvydko", "zdorovia", "zoria"]),
+                                       "amount": round(rng.uniform(60, 900), 2),
+                                       "created_at": ts(now - timedelta(hours=rng.uniform(5, 24 * 30)))})
+        db.insert("recurring_payments", {"customer_id": cid, "card_id": cards[cid], "merchant_id": "khvylia",
+                                         "amount": 199.0, "next_date": (now + timedelta(days=30)).strftime("%Y-%m-%d")})
+    # Sofia: a REAL duplicate (coffee, 95 UAH) + a normal subscription charge today -> agent must ask which one.
+    first = now - timedelta(minutes=50)
+    for at in (first, first + timedelta(seconds=47)):
+        db.insert("transactions", {"customer_id": 107, "card_id": cards[107], "merchant_id": "zerno",
+                                   "amount": 95.0, "created_at": ts(at)})
+    db.insert("transactions", {"customer_id": 107, "card_id": cards[107], "merchant_id": "khvylia",
+                               "amount": 199.0, "created_at": ts(now - timedelta(hours=2))})
+    # Andriy: unwanted subscription renewal yesterday + an unrecognised 4 999 UAH charge to the scam merchant today.
+    db.insert("transactions", {"customer_id": 108, "card_id": cards[108], "merchant_id": "khvylia",
+                               "amount": 199.0, "created_at": ts(now - timedelta(hours=26))})
+    db.insert("transactions", {"customer_id": 108, "card_id": cards[108], "merchant_id": "scam_secure",
+                               "amount": 4999.0, "is_fraud": 1, "created_at": ts(now - timedelta(hours=3))})
 
 
 def main() -> None:

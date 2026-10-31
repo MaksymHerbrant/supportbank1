@@ -81,3 +81,40 @@ async def test_repeat_question_after_refund_says_already_refunded(db, notifier) 
     assert first.actions and not second.actions
     assert "уже повернуто" in second.text
     assert db.scalar("SELECT COUNT(*) FROM actions WHERE action_type='refund_transaction' AND customer_id=101") == 1
+
+
+def test_agent_personas_seeded(db) -> None:  # noqa: ANN001
+    from app.incidents import impact
+    from app.db.repo import ago
+    pairs = impact.duplicate_pairs(db, None, ago(days=1), customer_id=107)
+    assert len(pairs) == 1 and pairs[0]["amount"] == 95.0
+    assert db.scalar("SELECT COUNT(*) FROM transactions WHERE customer_id=107 AND merchant_id='khvylia'") == 1
+    assert db.scalar("SELECT COUNT(*) FROM transactions WHERE customer_id=108 AND is_fraud=1") == 1
+
+
+async def test_agent_tools_refund_only_real_duplicate(db, notifier) -> None:  # noqa: ANN001
+    """Scripted Gemma: asks for the subscription refund first (rejected), then the coffee duplicate (refunded)."""
+    from app.llm import LLMClient, LLMResponse, ToolCall
+    from tests.conftest import FakeBackend, make_container
+    sub_tx = db.scalar("SELECT id FROM transactions WHERE customer_id=107 AND merchant_id='khvylia'")
+    dup_tx = db.scalar("SELECT MAX(id) FROM transactions WHERE customer_id=107 AND merchant_id='zerno'")
+    script = iter([
+        [ToolCall("request_refund", {"tx_id": sub_tx})],
+        [ToolCall("request_refund", {"tx_id": dup_tx})],
+        [ToolCall("reply_to_customer", {"text": "Повернув дубль 95 грн за каву, підписка — звичайний платіж."})],
+    ])
+
+    def respond(messages, tools):  # noqa: ANN001, ANN202
+        names = {t.name for t in tools or []}
+        if "submit_decision" in names:
+            return LLMResponse(tool_calls=[ToolCall("submit_decision", {
+                "decision": "auto_approve", "reasoning": "дубль", "customer_message": "ok"})])
+        if "reply_to_customer" in names:
+            return LLMResponse(tool_calls=next(script))
+        return LLMResponse(text="")
+    c = make_container(db, notifier, llm=LLMClient(FakeBackend(respond)))
+    reply = await c.pipeline.handle(107, "мені щось двічі списали")
+    assert "95" in reply.text
+    refunded = {r[0] for r in db.q("SELECT json_extract(params_json,'$.tx_id') FROM actions "
+                                   "WHERE action_type='refund_transaction'")}
+    assert refunded == {dup_tx}  # the subscription was NOT refunded

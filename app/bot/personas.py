@@ -6,6 +6,8 @@ from app.db.repo import Database
 
 # slug for /demo_login -> customers.demo_tag
 PERSONAS: dict[str, str] = {
+    "sofia": "sofia",
+    "andriy": "andriy",
     "loyal": "loyal",
     "refunder": "frequent_refunder",
     "newphone": "phone_changed",
@@ -13,6 +15,9 @@ PERSONAS: dict[str, str] = {
     "credit_ok": "credit_ok",
     "deferral": "credit_deferral",
     "fuel": "fuel_late_affected",
+    "fuel_a": "fuel_complainer_1",
+    "fuel_b": "fuel_complainer_2",
+    "fuel_c": "fuel_complainer_3",
     "fuel_clean": "fuel_late_clean",
     "phishing": "phish_reporter_3",
     "atm": "atm_reporter_3",
