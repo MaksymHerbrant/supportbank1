@@ -27,8 +27,9 @@ class Settings(BaseModel):
     gemini_api_key: str = ""
     llm_timeout_s: float = 45.0
     llm_retries: int = 2
+    llm_rpm: int = 14  # client-side rate limit for the Google AI free tier (0 = off)
 
-    embed_backend: str = "ollama"  # ollama | none
+    embed_backend: str = "ollama"  # ollama | google | none
     embed_model: str = "embeddinggemma"
     embed_fallback_model: str = "nomic-embed-text"
 
@@ -60,6 +61,7 @@ def get_settings() -> Settings:
         "gemini_api_key": _env("GEMINI_API_KEY", ""),
         "llm_timeout_s": _env("LLM_TIMEOUT_S", "45"),
         "llm_retries": _env("LLM_RETRIES", "2"),
+        "llm_rpm": _env("LLM_RPM", "14"),
         "embed_backend": _env("EMBED_BACKEND", "ollama"),
         "embed_model": _env("EMBED_MODEL", "embeddinggemma"),
         "embed_fallback_model": _env("EMBED_FALLBACK_MODEL", "nomic-embed-text"),

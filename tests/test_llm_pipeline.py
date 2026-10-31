@@ -39,6 +39,7 @@ async def test_pipeline_with_llm(db, notifier) -> None:  # noqa: ANN001
         reply = await c.pipeline.handle(cid, text)
         assert reply.triage.source == "llm"
         assert policy.is_reply_safe(reply.text, refund_executed=False)
+    await c.incidents.drain()
     inc = db.q1("SELECT * FROM incidents")
     assert inc["summary"].startswith("Масові подвійні")
     assert inc["hypothesis"].startswith("Термінал Fuel+")

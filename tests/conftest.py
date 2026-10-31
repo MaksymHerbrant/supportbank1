@@ -107,4 +107,5 @@ async def run_double_charge(c: Container) -> int:
                       (3, "Подвійне списання fuel plus")]:
         reply = await c.pipeline.handle(cid, text)
     assert reply.new_incident_id is not None
+    await c.incidents.drain()
     return reply.new_incident_id

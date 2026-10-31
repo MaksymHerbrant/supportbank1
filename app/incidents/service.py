@@ -1,6 +1,7 @@
 """Incident lifecycle: create, refresh (at_risk -> affected), close with final messages."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -14,7 +15,7 @@ from app.config import Settings
 from app.db.repo import Database, dumps, local_time, now_ts
 from app.incidents import impact
 from app.incidents.detector import IncidentDetector
-from app.incidents.investigator import Investigator
+from app.incidents.investigator import Investigator, baseline
 from app.incidents.linker import Linker
 from app.incidents.planner import Planner
 from app.llm import LLMClient
@@ -54,6 +55,7 @@ class IncidentService:
         self.detector = IncidentDetector(db, store, settings.incident_threshold, settings.incident_window_min,
                                          settings.similarity_threshold)
         self.investigator = Investigator(db, llm, tools)
+        self._background: set[asyncio.Task] = set()
 
     def describe(self, sig: Signature) -> str:
         merchant = self.db.scalar("SELECT name FROM merchants WHERE id=?", (sig.merchant_id,)) or "мерчанта"
@@ -72,8 +74,9 @@ class IncidentService:
         return out[:300] if out else base
 
     async def create_from_cluster(self, ticket_ids: list[int]) -> int:
+        """Create the incident fast (deterministic summary/hypothesis), then refine with the LLM in background."""
         sig = self.detector.merged_signature(ticket_ids)
-        summary = await self._summary(sig, ticket_ids)
+        summary = self.describe(sig)
         incident_id = self.db.insert("incidents", {
             "category": sig.category, "signature_json": sig.model_dump_json(), "summary": summary,
             "created_at": now_ts(),
@@ -84,25 +87,50 @@ class IncidentService:
                    [incident_id, *ticket_ids])
         self.db.ex(f"UPDATE escalations SET status='closed', decided_by='incident #{incident_id}' "
                    f"WHERE status='open' AND ticket_id IN ({marks})", ticket_ids)
-        # Description embedding: LLM summary + canonical description, so paraphrases match.
-        await self.store.add("incidents", str(incident_id), f"{summary}. {self.describe(sig)}",
-                             {"category": sig.category, "key": sig.key()})
+        await self.store.add("incidents", str(incident_id), summary, {"category": sig.category, "key": sig.key()})
         sync = impact.sync_members(self.db, incident_id)
         imp = impact.compute(self.db, sig)
-        hyp = await self.investigator.investigate(sig, imp)
+        base = baseline(self.db, sig, imp)
         self.db.ex("UPDATE incidents SET hypothesis=?, evidence_json=? WHERE id=?",
-                   (hyp.hypothesis, dumps(hyp.evidence), incident_id))
+                   (base.hypothesis, dumps(base.evidence), incident_id))
         if sig.category == "atm_capture" and sig.atm_id:
             self.tools.mark_atm_out_of_service(ActionContext(level=Level.INVESTIGATE, incident_id=incident_id),
-                                               sig.atm_id, f"incident #{incident_id}: cards captured", hyp.evidence)
+                                               sig.atm_id, f"incident #{incident_id}: cards captured", base.evidence)
         self.planner.plan_new_affected(incident_id)
-        sev = self._update_severity(incident_id)
-        await self._bug_ticket(incident_id, sig, hyp.hypothesis, hyp.evidence, hyp.suspected_component, sev,
-                               sync.affected_count, sync.at_risk_count)
+        self._update_severity(incident_id)
         log.info("incident %s created: %s affected=%s at_risk=%s", incident_id, sig.key(), sync.affected_count,
                  sync.at_risk_count)
         await self._changed(incident_id)
+        task = asyncio.create_task(self._refine(incident_id, sig, ticket_ids, imp))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
         return incident_id
+
+    async def _refine(self, incident_id: int, sig: Signature, ticket_ids: list[int], imp: impact.Impact) -> None:
+        """LLM summary + tool-using investigation; then update card and post the bug ticket."""
+        try:
+            summary = await self._summary(sig, ticket_ids)
+            if summary != self.describe(sig):
+                self.db.ex("UPDATE incidents SET summary=? WHERE id=?", (summary, incident_id))
+                # Description embedding: LLM summary + canonical description, so paraphrases match.
+                await self.store.add("incidents", str(incident_id), f"{summary}. {self.describe(sig)}",
+                                     {"category": sig.category, "key": sig.key()})
+            hyp = await self.investigator.investigate(sig, imp)
+            self.db.ex("UPDATE incidents SET hypothesis=?, evidence_json=? WHERE id=?",
+                       (hyp.hypothesis, dumps(hyp.evidence), incident_id))
+            counts = {r["role"]: r["n"] for r in self.db.q(
+                "SELECT role, COUNT(*) AS n FROM incident_members WHERE incident_id=? GROUP BY role", (incident_id,))}
+            sev = self._update_severity(incident_id)
+            await self._bug_ticket(incident_id, sig, hyp.hypothesis, hyp.evidence, hyp.suspected_component, sev,
+                                   counts.get("affected", 0), counts.get("at_risk", 0))
+            await self._changed(incident_id)
+        except Exception:  # noqa: BLE001 - background refinement must never break the bot
+            log.exception("incident %s refinement failed", incident_id)
+
+    async def drain(self) -> None:
+        """Wait for background refinements (tests, shutdown)."""
+        while self._background:
+            await asyncio.gather(*list(self._background), return_exceptions=True)
 
     def _update_severity(self, incident_id: int) -> str:
         inc = self.db.q1("SELECT category FROM incidents WHERE id=?", (incident_id,))

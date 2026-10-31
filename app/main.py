@@ -93,6 +93,7 @@ def main() -> None:
     settings = get_settings()
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("google_genai").setLevel(logging.ERROR)
     coro = check() if "--check" in sys.argv else run()
     try:
         sys.exit(asyncio.run(coro))

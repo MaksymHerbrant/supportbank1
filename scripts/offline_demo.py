@@ -28,6 +28,7 @@ def plain(text: str) -> str:
 
 async def main() -> None:
     logging.basicConfig(level=logging.WARNING)
+    logging.getLogger("google_genai").setLevel(logging.ERROR)
     db = Database(":memory:")
     seed(db)
     rules = "--rules" in sys.argv
@@ -43,6 +44,7 @@ async def main() -> None:
 
     for name in ["double_charge", "late_complaint", "phishing", "atm", "app_bug", "risky"]:
         await simulate.run(c, name, say, photo, delay=0)
+    await c.incidents.drain()
     plan_id = db.scalar("SELECT id FROM plans WHERE status='pending' ORDER BY id LIMIT 1")
     print("=" * 70)
     print(plain(render_incident(db, 1)[0]))

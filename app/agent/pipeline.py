@@ -123,14 +123,18 @@ class SupportPipeline:
         out = Reply("", ticket_id, tr)
         cat = tr.category
         try:
-            if cat == "social_engineering" or "social_engineering" in tr.risk_flags:
+            if tr.injection_detected:
+                # Policy: content that tries to steer the agent never triggers automatic actions.
+                await self._escalate(ticket_id, cid, tr, "prompt injection detected: no automatic actions")
+                out.escalated = True
+            elif cat == "phishing":
+                facts, out = await self._phishing(ctx, cid, ticket_id, tr, facts, out)
+            elif "social_engineering" in tr.rule_flags:
                 blocked = self._block_all_cards(ctx, cid, ticket_id, "social engineering: customer disclosed codes")
                 facts = ReplyFacts("social_engineering", tr.language, details=", ".join(blocked) or "")
                 out.actions += [f"block_card {c}" for c in blocked]
                 await self._escalate(ticket_id, cid, tr, "URGENT social engineering: customer shared codes; cards blocked")
                 out.escalated = True
-            elif cat == "phishing":
-                facts, out = await self._phishing(ctx, cid, ticket_id, tr, facts, out)
             elif tr.level == Level.HUMAN:
                 await self._escalate(ticket_id, cid, tr, f"level 4: flags={tr.risk_flags} confidence={tr.confidence}")
                 out.escalated = True
@@ -206,7 +210,9 @@ class SupportPipeline:
     async def _phishing(self, ctx: ActionContext, cid: int, ticket_id: int, tr: TriageResult, facts: ReplyFacts,
                         out: Reply) -> tuple[ReplyFacts, Reply]:
         fraud = [t for t in self.tools.get_transactions(customer_id=cid, since_hours=72) if t["is_fraud"]]
-        if fraud or "fraud" in tr.risk_flags:
+        # Block only on evidence: a fraud transaction in our data, or the customer explicitly says they
+        # entered card data (deterministic rule). An LLM-only "fraud" guess is not enough.
+        if fraud or "fraud" in tr.rule_flags:
             blocked = self._block_all_cards(ctx, cid, ticket_id, "phishing: confirmed fraudulent transaction"
                                             if fraud else "phishing: customer reports compromise")
             out.actions += [f"block_card {c}" for c in blocked]

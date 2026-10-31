@@ -50,8 +50,8 @@ TOOL_ALLOWLIST: dict[Level, frozenset[str]] = {
     Level.FAQ: READ_TOOLS | {"notify_customer", "escalate_to_operator"},
     Level.SAFE_ACTION: READ_TOOLS | {"block_card", "order_card_reissue", "open_dispute", "notify_customer",
                                      "escalate_to_operator"},
-    Level.INVESTIGATE: READ_TOOLS | {"block_card", "open_dispute", "notify_customer", "create_bug_ticket",
-                                     "escalate_to_operator"},
+    Level.INVESTIGATE: READ_TOOLS | {"block_card", "order_card_reissue", "open_dispute", "notify_customer",
+                                     "create_bug_ticket", "escalate_to_operator"},
     # Protective block of the requester's own card is always allowed.
     Level.HUMAN: READ_TOOLS | {"block_card", "notify_customer", "escalate_to_operator"},
 }

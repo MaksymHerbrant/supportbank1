@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
@@ -139,6 +140,8 @@ class GoogleBackend:
         self.model = settings.google_model
         self.client = genai.Client(api_key=settings.gemini_api_key)
         self.timeout = settings.llm_timeout_s
+        # Gemma 4 "thinks" by default (~800 hidden tokens, ~15 s); minimal thinking keeps replies ~1-3 s.
+        self.minimal_thinking = True
 
     async def chat(self, messages: list[Message], tools: list[ToolSpec] | None) -> LLMResponse:
         from google.genai import types
@@ -156,15 +159,24 @@ class GoogleBackend:
             # Gemma on the Gemini API does not accept system_instruction; prepend instead.
             contents[0].parts.insert(0, types.Part.from_text(text=system))
         config = types.GenerateContentConfig(temperature=0.1)
+        if self.minimal_thinking:
+            config.thinking_config = types.ThinkingConfig(thinking_level="minimal")
         if tools:
             config.tools = [types.Tool(function_declarations=[
                 types.FunctionDeclaration(name=t.name, description=t.description, parameters_json_schema=t.parameters)
                 for t in tools
             ])]
-        resp = await asyncio.wait_for(
-            self.client.aio.models.generate_content(model=self.model, contents=contents, config=config),
-            timeout=self.timeout,
-        )
+        try:
+            resp = await asyncio.wait_for(
+                self.client.aio.models.generate_content(model=self.model, contents=contents, config=config),
+                timeout=self.timeout,
+            )
+        except Exception as exc:
+            if self.minimal_thinking and "thinking" in str(exc).lower() and "not supported" in str(exc).lower():
+                log.info("Model does not support thinking_level; disabling it")
+                self.minimal_thinking = False
+                return await self.chat(messages, tools)
+            raise
         calls = [ToolCall(name=fc.name, arguments=dict(fc.args or {})) for fc in (resp.function_calls or [])]
         text = ""
         try:
@@ -174,13 +186,36 @@ class GoogleBackend:
         return LLMResponse(text=text, tool_calls=calls)
 
 
-class LLMClient:
-    """Robust facade: retries, timeouts, function calling with JSON fallback."""
+class RateLimiter:
+    """Sliding-window limiter: waits for a free slot instead of hitting the provider's 429."""
 
-    def __init__(self, backend: LLMBackend | None, retries: int = 2, timeout_s: float = 45.0) -> None:
+    def __init__(self, rpm: int) -> None:
+        self.rpm = rpm
+        self.calls: deque[float] = deque()
+        self.lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        if self.rpm <= 0:
+            return
+        async with self.lock:
+            while True:
+                now = time.monotonic()
+                while self.calls and now - self.calls[0] >= 60:
+                    self.calls.popleft()
+                if len(self.calls) < self.rpm:
+                    self.calls.append(now)
+                    return
+                await asyncio.sleep(60 - (now - self.calls[0]) + 0.05)
+
+
+class LLMClient:
+    """Robust facade: rate limit, retries, timeouts, function calling with JSON fallback."""
+
+    def __init__(self, backend: LLMBackend | None, retries: int = 2, timeout_s: float = 45.0, rpm: int = 0) -> None:
         self.backend = backend
         self.retries = retries
         self.timeout_s = timeout_s
+        self.limiter = RateLimiter(rpm)
         self._down_until = 0.0
 
     @classmethod
@@ -193,7 +228,8 @@ class LLMClient:
                 backend = GoogleBackend(settings)
         except Exception:  # noqa: BLE001 - missing SDK / bad config must not crash the bot
             log.exception("LLM backend init failed; running in rule-based mode")
-        return cls(backend, retries=settings.llm_retries, timeout_s=settings.llm_timeout_s)
+        rpm = settings.llm_rpm if settings.llm_backend == "google" else 0
+        return cls(backend, retries=settings.llm_retries, timeout_s=settings.llm_timeout_s, rpm=rpm)
 
     @property
     def available(self) -> bool:
@@ -204,12 +240,14 @@ class LLMClient:
         if not self.available:
             return None
         for attempt in range(self.retries + 1):
+            await self.limiter.acquire()
             try:
                 return await asyncio.wait_for(self.backend.chat(messages, tools), timeout=self.timeout_s + 5)
             except Exception as exc:  # noqa: BLE001
-                log.warning("LLM call failed (attempt %s/%s): %s", attempt + 1, self.retries + 1, exc)
+                log.warning("LLM call failed (attempt %s/%s): %s", attempt + 1, self.retries + 1, str(exc)[:160])
                 if attempt < self.retries:
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                    # 429 = quota window; back off longer. 5xx are short transient blips.
+                    await asyncio.sleep((5.0 if "429" in str(exc) else 0.5) * (attempt + 1))
         self._down_until = time.monotonic() + CIRCUIT_OPEN_S
         log.warning("LLM unavailable; rule-based mode for %ss", CIRCUIT_OPEN_S)
         return None

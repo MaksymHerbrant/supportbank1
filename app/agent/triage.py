@@ -98,6 +98,8 @@ class TriageResult(BaseModel):
     signature: Signature
     language: str = "uk"
     injection_detected: bool = False
+    # Flags found by deterministic rules (not the LLM): only these may trigger protective actions.
+    rule_flags: list[str] = Field(default_factory=list)
     source: str = "rules"  # llm | rules
 
 
@@ -278,6 +280,7 @@ class Triage:
 
         rule_cat, rule_conf = rule_category(combined)
         flags = rule_flags(text)
+        deterministic = set(flags)
         if llm_out is not None:
             category = llm_out.category
             # Disagreement between model and keyword rules on an incident category -> trust rules.
@@ -294,6 +297,8 @@ class Triage:
             language = detect_language(text)
         if category == "social_engineering":
             flags.add("social_engineering")
+        if rule_cat == "social_engineering":
+            deterministic.add("social_engineering")
         if category == "refund_demand" and "vip_pressure" in flags:
             flags.add("unverified_claim")
         if self._repeat_contact(customer_id, category):
@@ -321,6 +326,7 @@ class Triage:
         result = TriageResult(
             intent=intent[:120], category=category, level=level, confidence=round(confidence, 2),
             risk_flags=sorted(flags), signature=sig, language=language, injection_detected=injection, source=source,
+            rule_flags=sorted(deterministic),
         )
         log.info("triage customer=%s cat=%s level=%s conf=%.2f flags=%s src=%s inj=%s",
                  customer_id, category, int(level), confidence, result.risk_flags, source, injection)

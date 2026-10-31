@@ -23,16 +23,25 @@ class Embedder(Protocol):
 
 
 class EmbedClient:
-    """Calls Ollama /api/embed, falling back between models and caching failures."""
+    """Calls Ollama /api/embed or Google AI embeddings, falling back between models and caching failures."""
 
     def __init__(self, settings: Settings) -> None:
-        self.enabled = settings.embed_backend == "ollama"
+        self.backend = settings.embed_backend
+        self.enabled = self.backend == "ollama" or (self.backend == "google" and bool(settings.gemini_api_key))
         self.url = settings.ollama_url.rstrip("/") + "/api/embed"
         self.models = [m for m in (settings.embed_model, settings.embed_fallback_model) if m]
         self._down_until = 0.0
         self._active: str | None = None
+        self._google = None
+        if self.backend == "google" and self.enabled:
+            from google import genai
+
+            self._google = genai.Client(api_key=settings.gemini_api_key)
 
     async def _call(self, model: str, texts: list[str]) -> list[np.ndarray]:
+        if self._google is not None:
+            result = await self._google.aio.models.embed_content(model=model, contents=texts)
+            return [np.asarray(e.values, dtype=np.float32) for e in result.embeddings]
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(self.url, json={"model": model, "input": texts})
             resp.raise_for_status()
