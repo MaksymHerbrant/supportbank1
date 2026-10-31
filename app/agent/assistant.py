@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable
 from app.agent import policy
 import re
 
-from app.agent.decision import DecisionContext, DecisionEngine, ProposedAction
+from app.agent.decision import GOODWILL_COOLDOWN_DAYS, DecisionContext, DecisionEngine, ProposedAction
 from app.agent.policy import ActionContext, Level, PolicyViolation
 from app.agent.tools import AUTO_APPROVER_PREFIX, BankTools
 from app.db.repo import Database, ago, local_time, money, now_ts
@@ -182,10 +182,21 @@ class SupportAgent:
                     f"заява клієнта: {policy.mask_pan(text)[:200]}"]
         if cancelled:
             evidence.append(f"підписку скасовано {cancelled['created_at']}")
+        recent_goodwill = bool(self.db.scalar(
+            "SELECT COUNT(*) FROM actions WHERE customer_id=? AND action_type='refund_transaction' "
+            "AND reason LIKE 'goodwill%' AND created_at >= ?", (cid, ago(days=GOODWILL_COOLDOWN_DAYS))))
         fd = await self.decisions.decide(DecisionContext(
             kind="refund_claim", customer_id=cid, ticket_id=ticket_id, claim_text=text, data_confirmed=False,
             evidence=evidence, proposed=ProposedAction(type="refund_transaction", ref_id=tx["id"],
-                                                       amount=tx["amount"])))
+                                                       amount=tx["amount"]), recent_goodwill=recent_goodwill))
+        if fd.decision == "auto_approve":
+            actx = ActionContext(level=Level.INVESTIGATE, requester_id=cid,
+                                 approved_by=f"{AUTO_APPROVER_PREFIX}decision#{fd.decision_id}")
+            self.tools.refund_transaction(actx, tx["id"], f"goodwill: auto-approved decision #{fd.decision_id} "
+                                                          f"(risk {fd.risk.level})", evidence)
+            res.refunded = True
+            res.actions.append(f"goodwill_refund tx#{tx['id']}: {money(tx['amount'])} грн (auto)")
+            return {"status": "refunded", "amount": tx["amount"], "arrives": "1–3 робочі дні"}
         await escalate(("🔐 SECURITY REVIEW · " if fd.security_review else "")
                        + f"запит на повернення: {tx['merchant']} {money(tx['amount'])} грн (послугу оскаржено)",
                        {"action": "refund_transaction", "tx_id": tx["id"], "amount": tx["amount"],

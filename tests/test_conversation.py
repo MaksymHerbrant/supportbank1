@@ -117,10 +117,69 @@ async def test_agent_tools_refund_only_real_duplicate(db, notifier) -> None:  # 
     assert "95" in reply.text
     refunded = {r[0] for r in db.q("SELECT json_extract(params_json,'$.tx_id') FROM actions "
                                    "WHERE action_type='refund_transaction'")}
-    assert refunded == {dup_tx}  # the subscription was NOT refunded
+    assert refunded == {sub_tx, dup_tx}
+    reasons = {r[0]: r[1] for r in db.q("SELECT json_extract(params_json,'$.tx_id'), reason FROM actions "
+                                        "WHERE action_type='refund_transaction'")}
+    assert reasons[sub_tx].startswith("goodwill")      # normal charge: goodwill path (<= 1000, low risk)
+    assert not reasons[dup_tx].startswith("goodwill")  # real duplicate: bank-error path
+
+
+def _agent_llm(tool_steps, decision="auto_approve"):  # noqa: ANN001, ANN202
+    from app.llm import LLMClient, LLMResponse, ToolCall
+    from tests.conftest import FakeBackend
+    script = iter(tool_steps)
+
+    def respond(messages, tools):  # noqa: ANN001, ANN202
+        names = {t.name for t in tools or []}
+        if "reply_to_customer" in names:
+            return LLMResponse(tool_calls=next(script))
+        if "submit_decision" in names:
+            return LLMResponse(tool_calls=[ToolCall("submit_decision", {"decision": decision,
+                                                                        "customer_message": "ok"})])
+        return LLMResponse(text="")
+    return LLMClient(FakeBackend(respond))
+
+
+async def test_goodwill_refund_up_to_1000_for_low_risk(db, notifier) -> None:  # noqa: ANN001
+    from app.llm import ToolCall
+    from tests.conftest import make_container
+    sub_tx = db.scalar("SELECT id FROM transactions WHERE customer_id=107 AND merchant_id='khvylia'")
+    llm = _agent_llm([[ToolCall("request_refund", {"tx_id": sub_tx})],
+                      [ToolCall("reply_to_customer", {"text": "Повернув 199 грн за підписку."})]])
+    c = make_container(db, notifier, llm=llm)
+    reply = await c.pipeline.handle(107, "Поверніть 199 за підписку, вона списалась хоча я скасувала")
+    assert not reply.escalated
+    assert db.scalar("SELECT status FROM transactions WHERE id=?", (sub_tx,)) == "refunded"
+    assert db.scalar("SELECT actor FROM actions WHERE action_type='refund_transaction'") == "agent"
+
+
+async def test_second_goodwill_within_30_days_goes_to_operator(db, notifier) -> None:  # noqa: ANN001
+    from app.llm import ToolCall
+    from tests.conftest import make_container
+    txs = [r[0] for r in db.q("SELECT id FROM transactions WHERE customer_id=107 AND merchant_id!='zerno' "
+                              "AND amount < 1000 ORDER BY id DESC LIMIT 2")]
+    llm = _agent_llm([[ToolCall("request_refund", {"tx_id": txs[0]})], [ToolCall("reply_to_customer", {"text": "ok"})],
+                      [ToolCall("request_refund", {"tx_id": txs[1]})], [ToolCall("reply_to_customer", {"text": "ok"})]])
+    c = make_container(db, notifier, llm=llm)
+    first = await c.pipeline.handle(107, "послугу не надали, поверніть")
+    second = await c.pipeline.handle(107, "і ще за цю послугу поверніть, її теж не надали")
+    assert not first.escalated and second.escalated
+
+
+async def test_goodwill_over_1000_needs_operator(db, notifier) -> None:  # noqa: ANN001
+    from app.llm import ToolCall
+    from tests.conftest import make_container
+    tx = db.insert("transactions", {"customer_id": 107, "card_id": db.scalar("SELECT id FROM cards WHERE customer_id=107"),
+                                    "merchant_id": "shvydko", "amount": 1500.0, "created_at": "2026-10-30 10:00:00"})
+    llm = _agent_llm([[ToolCall("request_refund", {"tx_id": tx})], [ToolCall("reply_to_customer", {"text": "ok"})]])
+    c = make_container(db, notifier, llm=llm)
+    reply = await c.pipeline.handle(107, "таксі не приїхало, поверніть 1500")
+    assert reply.escalated
+    assert db.scalar("SELECT status FROM transactions WHERE id=?", (tx,)) != "refunded"
 
 
 async def test_contested_normal_charge_goes_to_operator_and_refunds_on_approval(db, notifier) -> None:  # noqa: ANN001
+    """Model says needs_operator -> operator card -> approval refunds and notifies."""
     from app.llm import LLMClient, LLMResponse, ToolCall
     from tests.conftest import FakeBackend, make_container
     sub_tx = db.scalar("SELECT id FROM transactions WHERE customer_id=108 AND merchant_id='khvylia'")
@@ -132,7 +191,7 @@ async def test_contested_normal_charge_goes_to_operator_and_refunds_on_approval(
         if "reply_to_customer" in names:
             return LLMResponse(tool_calls=next(script))
         if "submit_decision" in names:
-            return LLMResponse(tool_calls=[ToolCall("submit_decision", {"decision": "auto_approve",
+            return LLMResponse(tool_calls=[ToolCall("submit_decision", {"decision": "needs_operator",
                                                                         "customer_message": "ok"})])
         return LLMResponse(text="")
     c = make_container(db, notifier, llm=LLMClient(FakeBackend(respond)))
